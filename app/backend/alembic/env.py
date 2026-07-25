@@ -4,9 +4,13 @@
 
 import asyncio
 import importlib
+import os
 import pkgutil
 import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from alembic import context
 from sqlalchemy import pool
@@ -34,6 +38,21 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# alembic.ini ships with `sqlalchemy.url = ""`, and nothing here ever replaced
+# it — which is why no migration in this project had ever been run anywhere.
+# Take the URL from the environment (loaded from app/.env), matching how the
+# application itself connects, so migrations and runtime can never drift onto
+# different databases.
+_env_path = Path(__file__).resolve().parents[2] / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path, override=False)
+
+_database_url = os.environ.get("DATABASE_URL")
+if _database_url:
+    # Alembic interpolates %(...)s in ini values; a percent-encoded password
+    # (e.g. %40 for '@') would be mangled. set_main_option escapes for us.
+    config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
