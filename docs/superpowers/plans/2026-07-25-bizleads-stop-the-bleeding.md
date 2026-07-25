@@ -767,6 +767,14 @@ READONLY_PREFIXES = [
     "/api/v1/entities/workspace_members",
 ]
 
+# Schema-valid bodies, so the request reaches the handler and the assertion
+# tests our 403 rather than FastAPI's request validation.
+VALID_CREATE_BODIES = [
+    ("/api/v1/entities/credit_ledger", {"workspace_id": 1, "amount": 10, "balance_after": 10, "action": "test"}),
+    ("/api/v1/entities/search_jobs", {"user_id": "user-a", "workspace_id": 1}),
+    ("/api/v1/entities/workspace_members", {"workspace_id": 1}),
+]
+
 
 async def _seed_workspace(db_session):
     workspace = Workspaces(
@@ -785,11 +793,11 @@ async def test_anonymous_is_rejected(anon_client, prefix):
     assert (await anon_client.get(prefix)).status_code == 401
 
 
-@pytest.mark.parametrize("prefix", READONLY_PREFIXES)
-async def test_create_is_forbidden(user_a_client, db_session, prefix):
+@pytest.mark.parametrize("prefix,body", VALID_CREATE_BODIES)
+async def test_create_is_forbidden(user_a_client, db_session, prefix, body):
     await _seed_workspace(db_session)
-    response = await user_a_client.post(prefix, json={})
-    assert response.status_code in (403, 422)
+    response = await user_a_client.post(prefix, json=body)
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("prefix", READONLY_PREFIXES)
@@ -1441,14 +1449,28 @@ async def test_foreign_session_is_rejected(user_a_client, db_session, monkeypatc
     assert response.status_code == 403
 
 
-async def test_unpaid_session_is_rejected(user_a_client, db_session, monkeypatch):
-    await _seed_workspace(db_session)
+async def test_unpaid_session_does_not_activate(user_a_client, db_session, monkeypatch):
+    workspace = await _seed_workspace(db_session)
     monkeypatch.setattr(
         payments.stripe.checkout.Session, "retrieve",
         lambda session_id: _fake_session(USER_A_ID, payment_status="unpaid"),
     )
     response = await user_a_client.post("/api/v1/billing/verify-payment", json={"session_id": "cs_test_1"})
-    assert response.status_code != 200 or response.json()["status"] != "active"
+
+    assert response.status_code == 200
+    assert response.json()["status"] != "active"
+
+    refreshed = (await db_session.execute(
+        select(Workspaces).where(Workspaces.id == workspace.id)
+    )).scalar_one()
+    await db_session.refresh(refreshed)
+    assert refreshed.plan == "trial", "unpaid session upgraded the plan"
+    assert refreshed.subscription_status == "trialing"
+
+    ledger_rows = (await db_session.execute(
+        select(Credit_ledger).where(Credit_ledger.reference_id == "cs_test_1")
+    )).scalars().all()
+    assert ledger_rows == [], "unpaid session wrote a ledger row"
 
 
 async def test_replay_does_not_reset_credits(user_a_client, db_session, monkeypatch):
