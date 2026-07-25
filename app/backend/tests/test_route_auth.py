@@ -48,3 +48,20 @@ AIHUB_ROUTES = [
 async def test_aihub_requires_authentication(anon_client, path):
     response = await anon_client.post(path, json={})
     assert response.status_code == 401, f"{path} is callable anonymously"
+
+
+FABRICATION_ROUTES = [
+    "/api/v1/search/businesses",
+    "/api/v1/automation/generate-leads",
+]
+
+
+@pytest.mark.parametrize("path", FABRICATION_ROUTES)
+async def test_fabrication_routes_are_deleted(user_a_client, path):
+    # Unlike the ALL_ROUTES case above, this really is a plain 404: both
+    # "/businesses" and "/generate-leads" are literal path segments, not
+    # "/{id}"-shaped, so there is no sibling route left in search.py or
+    # automation.py for FastAPI to fall through to. Verified empirically
+    # (not assumed) before writing this assertion.
+    response = await user_a_client.post(path, json={})
+    assert response.status_code == 404, f"{path} still generates fabricated businesses"
