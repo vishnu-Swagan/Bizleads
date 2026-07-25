@@ -73,9 +73,21 @@ async def ensure_workspace_for_user(user: UserResponse, db: AsyncSession) -> Wor
     The only sanctioned creation point. Called from GET /billing/usage and
     POST /discover/run so the three previously-divergent copies of this logic
     behave identically.
+
+    owner_id has no unique constraint (models/workspaces.py only indexes it),
+    so two concurrent first requests from the same user can both find nothing
+    and both insert, leaving a genuine duplicate row. Ordering by id and
+    taking the first result tolerates that duplicate deterministically
+    (oldest wins) instead of letting scalar_one_or_none() raise
+    MultipleResultsFound and 500 every subsequent request from that user.
+    This is a mitigation, not a cure - the real fix is a unique index on
+    owner_id, which needs an Alembic migration and belongs with the
+    Foundation-tier migration work, not here.
     """
-    result = await db.execute(select(Workspaces).where(Workspaces.owner_id == user.id))
-    workspace = result.scalar_one_or_none()
+    result = await db.execute(
+        select(Workspaces).where(Workspaces.owner_id == user.id).order_by(Workspaces.id.asc()).limit(1)
+    )
+    workspace = result.scalars().first()
     if workspace:
         return workspace
 
@@ -102,9 +114,17 @@ async def get_current_workspace(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Workspaces:
-    """Resolve the caller's workspace. Never creates; 404 when absent."""
-    result = await db.execute(select(Workspaces).where(Workspaces.owner_id == current_user.id))
-    workspace = result.scalar_one_or_none()
+    """Resolve the caller's workspace. Never creates; 404 when absent.
+
+    Same duplicate-tolerance as ensure_workspace_for_user: owner_id is
+    indexed but not unique, so this takes the lowest-id row deterministically
+    rather than raising MultipleResultsFound if a duplicate ever exists. A
+    unique index on owner_id (Foundation-tier migration) is the real fix.
+    """
+    result = await db.execute(
+        select(Workspaces).where(Workspaces.owner_id == current_user.id).order_by(Workspaces.id.asc()).limit(1)
+    )
+    workspace = result.scalars().first()
     if not workspace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No workspace found for this account")
     return workspace
