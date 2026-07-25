@@ -190,25 +190,32 @@ def _normalize_feature(feature: dict, country: str) -> Optional[dict]:
 
         short_address = f"{city}, {region}" if city else address
 
-        # MapBox doesn't provide website/phone directly in geocoding results
-        # These will be enriched by scoring or deep analysis
+        # MapBox geocoding returns no website, phone or social data. Those fields
+        # are therefore UNKNOWN, not absent — and they must stay distinguishable.
+        #
+        # This previously returned has_website=False, which scoring.py reads as a
+        # confirmed "no website" and scores Need at 90. Every real business came
+        # back labelled "No Website" whether or not it had one: a fabricated
+        # verdict on a real business. None means "not checked"; only the
+        # enrichment pass may set it True or False.
         return {
             "business_name": name,
             "category": category,
             "location": short_address or address,
             "country": country,
-            "website_url": "",
-            "website_score": 0,
-            "social_score": 20,  # Default - unknown
-            "has_website": False,  # Unknown from MapBox, assume no for discovery
-            "contact_email": "",
-            "contact_phone": "",
+            "website_url": None,
+            "website_score": None,
+            "social_score": None,
+            "has_website": None,
+            "contact_email": None,
+            "contact_phone": None,
             "mapbox_id": feature.get("id", ""),
             "coordinates": feature.get("center", []),
             "website_state": "unknown",
-            "data_source": "mapbox",
+            "data_source": "provider",
+            "provider": "mapbox",
             "timing_signal": "",
-            "top_opportunity": "Digital presence unknown - potential website build opportunity",
+            "qualification_required": True,
         }
     except Exception as e:
         logger.error(f"Error normalizing MapBox feature: {e}")

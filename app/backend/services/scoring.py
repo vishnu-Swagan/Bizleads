@@ -19,9 +19,17 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def calculate_priority_score(scores: Dict[str, int], risk_penalty: int = 0) -> int:
-    """Calculate weighted priority score from sub-scores"""
-    need = scores.get("need", 0)
+def calculate_priority_score(scores: Dict[str, Any], risk_penalty: int = 0) -> Optional[int]:
+    """Calculate weighted priority score from sub-scores.
+
+    Returns None when Need is unmeasured. Need carries the heaviest weight
+    (0.30), so substituting a placeholder for it would produce a confident-
+    looking ranking derived from a value nobody measured. An unqualified lead
+    has no priority until the enrichment pass gives it one.
+    """
+    need = scores.get("need")
+    if need is None:
+        return None
     buyability = scores.get("buyability", 0)
     timing = scores.get("timing", 0)
     reachability = scores.get("reachability", 0)
@@ -41,19 +49,26 @@ def calculate_priority_score(scores: Dict[str, int], risk_penalty: int = 0) -> i
     return max(0, min(100, priority))
 
 
-def get_website_state(has_website: bool, website_score: int) -> str:
+def get_website_state(has_website: Optional[bool], website_score: Optional[int]) -> str:
     """
     Distinguish website states:
-    - no_website: Business has no website
-    - parked: Domain exists but parked/placeholder
-    - weak: Website exists but poor quality
-    - moderate: Acceptable but improvable
-    - healthy: Good website
-    - unknown: Status not determined
+    - unknown: not checked yet — NOT the same as "no website"
+    - no_website: confirmed to have none
+    - parked: domain resolves but is a placeholder
+    - weak: exists but poor quality
+    - moderate: acceptable but improvable
+    - healthy: good website
+
+    `has_website` is Optional on purpose. Discovery providers do not return
+    website data, so a freshly-discovered business is `None` (unchecked) until
+    the enrichment pass measures it. Treating None as False is how every real
+    business ended up labelled "No Website".
     """
-    if not has_website:
+    if has_website is None:
+        return "unknown"
+    if has_website is False:
         return "no_website"
-    if website_score == 0:
+    if website_score is None:
         return "unknown"
     if website_score < 15:
         return "parked"
@@ -66,16 +81,32 @@ def get_website_state(has_website: bool, website_score: int) -> str:
 
 def build_score_breakdown(business_data: Dict[str, Any]) -> Dict[str, Any]:
     """Build detailed score breakdown with explanations"""
-    website_score = business_data.get("website_score", 0)
-    social_score = business_data.get("social_score", 0)
-    has_website = business_data.get("has_website", False)
+    # No defaults here. A missing key means "not measured", and defaulting it to
+    # 0 or False is what made unqualified leads look like confirmed opportunities.
+    website_score = business_data.get("website_score")
+    social_score = business_data.get("social_score")
+    has_website = business_data.get("has_website")
 
     # Need Score
-    need = 0
+    need: Optional[int] = None
     need_factors = []
-    if not has_website:
+    if has_website is None:
+        need = None
+        need_factors.append({
+            "factor": "Website status not checked — run deep qualification to measure",
+            "impact": 0,
+            "source": "system",
+        })
+    elif has_website is False:
         need = 90
-        need_factors.append({"factor": "No website detected", "impact": +40, "source": "discovery"})
+        need_factors.append({"factor": "No website detected", "impact": +40, "source": "audit"})
+    elif website_score is None:
+        need = None
+        need_factors.append({
+            "factor": "Website found but not yet audited",
+            "impact": 0,
+            "source": "system",
+        })
     elif website_score < 20:
         need = 80
         need_factors.append({"factor": "Very weak website presence", "impact": +35, "source": "audit"})
@@ -86,9 +117,15 @@ def build_score_breakdown(business_data: Dict[str, Any]) -> Dict[str, Any]:
         need = max(0, 100 - website_score)
         need_factors.append({"factor": f"Website score: {website_score}/100", "impact": 0, "source": "audit"})
 
-    if social_score < 20:
+    if social_score is None:
+        need_factors.append({
+            "factor": "Social presence not checked",
+            "impact": 0,
+            "source": "system",
+        })
+    elif social_score < 20 and need is not None:
         need = min(100, need + 15)
-        need_factors.append({"factor": "Minimal social media presence", "impact": +15, "source": "discovery"})
+        need_factors.append({"factor": "Minimal social media presence", "impact": +15, "source": "audit"})
 
     # Buyability Score (based on available signals)
     buyability = business_data.get("buyability_score", 50)
@@ -118,12 +155,25 @@ def build_score_breakdown(business_data: Dict[str, Any]) -> Dict[str, Any]:
         reachability = 10
         reachability_factors.append({"factor": "No direct contact found", "impact": -40, "source": "discovery"})
 
-    # Confidence Score
-    confidence = business_data.get("confidence_score", 45)
-    confidence_factors = business_data.get("confidence_factors", [
-        {"factor": "AI-inferred data (not provider-verified)", "impact": -30, "source": "system"},
-        {"factor": "Single-source discovery", "impact": -15, "source": "system"},
-    ])
+    # Evidence Confidence — must reflect what was actually measured.
+    confidence = business_data.get("confidence_score")
+    confidence_factors = business_data.get("confidence_factors")
+    if confidence is None:
+        if has_website is None:
+            # Identity came from a provider, but the thing we rank on is unmeasured.
+            confidence = 40
+            confidence_factors = [
+                {"factor": "Identity confirmed by discovery provider", "impact": +25, "source": "provider"},
+                {"factor": "Web presence not yet measured", "impact": -35, "source": "system"},
+            ]
+        else:
+            confidence = 70
+            confidence_factors = [
+                {"factor": "Identity confirmed by discovery provider", "impact": +25, "source": "provider"},
+                {"factor": "Website status measured directly", "impact": +25, "source": "audit"},
+            ]
+    if confidence_factors is None:
+        confidence_factors = []
 
     scores = {
         "need": need,
@@ -139,6 +189,9 @@ def build_score_breakdown(business_data: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "priority_score": priority,
+        # True when the lead cannot be ranked until the enrichment pass measures
+        # its web presence. The UI must show this rather than a number.
+        "qualification_required": need is None,
         "scores": scores,
         "breakdowns": {
             "need": {"score": need, "factors": need_factors},

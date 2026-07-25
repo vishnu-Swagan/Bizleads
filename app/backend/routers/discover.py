@@ -171,10 +171,17 @@ async def run_discovery(
             biz["website_state"] = score_data["website_state"]
             biz["score_version"] = score_data["score_version"]
             biz["risk_reasons"] = score_data.get("risk_reasons", [])
-            biz["data_source"] = "provider"
+            biz["qualification_required"] = score_data.get("qualification_required", False)
+            biz["data_source"] = biz.get("data_source") or "provider"
             scored_results.append(biz)
 
-        scored_results.sort(key=lambda x: x.get("priority_score", 0), reverse=True)
+        # priority_score is None for leads whose web presence has not been
+        # measured yet. Sort those last rather than treating them as zero —
+        # unranked is not the same as ranked-lowest.
+        scored_results.sort(
+            key=lambda x: (x.get("priority_score") is not None, x.get("priority_score") or 0),
+            reverse=True,
+        )
 
         result = await db.execute(select(Search_jobs).where(Search_jobs.id == job_id))
         job = result.scalar_one_or_none()

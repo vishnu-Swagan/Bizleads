@@ -6,6 +6,16 @@ import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+# Load app/.env before anything reads settings. Previously this happened only
+# under run_in_debug_mode(), so a token added to .env had no effect when the
+# app was started with uvicorn — the normal path.
+from dotenv import load_dotenv as _load_dotenv
+from pathlib import Path as _Path
+
+_ENV_PATH = _Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    _load_dotenv(_ENV_PATH, override=False)
+
 from core.config import settings
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
