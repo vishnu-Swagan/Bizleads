@@ -13,6 +13,7 @@ from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.credit_ledger import Credit_ledger
+from dependencies.tenancy import ensure_workspace_for_user
 
 import stripe
 
@@ -271,7 +272,12 @@ async def verify_payment(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify payment and activate subscription"""
+    """Verify a completed checkout and activate the subscription.
+
+    Guards, in order: the session must belong to the caller, must be paid, and
+    must not have been applied before. Without the last guard a single purchase
+    could be replayed to reset credit usage indefinitely.
+    """
     if not stripe.api_key:
         raise HTTPException(status_code=503, detail="Payment service is not configured. Please contact support.")
 
@@ -285,54 +291,61 @@ async def verify_payment(
         raise HTTPException(status_code=400, detail="Invalid checkout session")
     except Exception as e:
         logger.error(f"Stripe retrieval error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve payment session: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve payment session")
 
-    plan = session.metadata.get("plan", "solo")
+    metadata = session.metadata or {}
+    if metadata.get("user_id") != current_user.id:
+        logger.warning("Checkout session %s does not belong to the calling user", data.session_id)
+        raise HTTPException(status_code=403, detail="This checkout session does not belong to your account")
+
+    plan = metadata.get("plan", "solo")
     plan_info = PLANS.get(plan, PLANS["solo"])
 
-    if session.status == "complete":
-        # Update workspace
-        result = await db.execute(
-            select(Workspaces).where(Workspaces.owner_id == current_user.id)
-        )
-        workspace = result.scalar_one_or_none()
+    if session.status != "complete" or getattr(session, "payment_status", None) != "paid":
+        return {"status": session.status or "pending", "plan": plan}
 
-        if workspace:
-            workspace.plan = plan
-            workspace.subscription_status = "active"
-            workspace.monthly_credits = plan_info["credits"]
-            workspace.max_seats = plan_info["seats"]
-            workspace.stripe_customer_id = session.customer or ""
-            workspace.stripe_subscription_id = session.subscription or ""
-            workspace.credits_used = 0
-            workspace.credits_reset_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
-            await db.commit()
-        else:
-            # Create workspace if it doesn't exist yet
-            workspace = Workspaces(
-                name=f"{current_user.email or 'User'}'s Workspace",
-                slug=current_user.id[:8],
-                owner_id=current_user.id,
-                plan=plan,
-                subscription_status="active",
-                monthly_credits=plan_info["credits"],
-                credits_used=0,
-                max_seats=plan_info["seats"],
-                stripe_customer_id=session.customer or "",
-                stripe_subscription_id=session.subscription or "",
-                credits_reset_at=(datetime.utcnow() + timedelta(days=30)).isoformat(),
-            )
-            db.add(workspace)
-            await db.commit()
+    workspace = await ensure_workspace_for_user(current_user, db)
 
+    existing = await db.execute(
+        select(Credit_ledger).where(Credit_ledger.reference_id == session.id)
+    )
+    if existing.scalar_one_or_none():
+        # Already applied. Report current state; mutate nothing.
         return {
             "status": "active",
-            "plan": plan,
-            "plan_name": plan_info["name"],
-            "credits": plan_info["credits"],
+            "plan": workspace.plan,
+            "plan_name": PLANS.get(workspace.plan, plan_info)["name"],
+            "credits": workspace.monthly_credits,
+            "already_applied": True,
         }
 
-    return {"status": session.status or "pending", "plan": plan}
+    workspace.plan = plan
+    workspace.subscription_status = "active"
+    workspace.monthly_credits = plan_info["credits"]
+    workspace.max_seats = plan_info["seats"]
+    workspace.stripe_customer_id = session.customer or ""
+    workspace.stripe_subscription_id = session.subscription or ""
+    workspace.credits_used = 0
+    workspace.credits_reset_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+
+    db.add(Credit_ledger(
+        workspace_id=workspace.id,
+        amount=plan_info["credits"],
+        balance_after=plan_info["credits"],
+        action="subscription_activated",
+        description=f"{plan_info['name']} plan activated",
+        reference_id=session.id,
+        idempotency_key=session.id,
+    ))
+
+    await db.commit()
+
+    return {
+        "status": "active",
+        "plan": plan,
+        "plan_name": plan_info["name"],
+        "credits": plan_info["credits"],
+    }
 
 
 @router.post("/deduct-credit")
