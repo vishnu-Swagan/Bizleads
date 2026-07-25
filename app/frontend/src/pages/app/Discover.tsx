@@ -49,6 +49,7 @@ interface BusinessResult {
   risk_reasons: string[];
   top_opportunity: string;
   timing_signal: string;
+  data_source?: string;
 }
 
 interface Filters {
@@ -186,6 +187,7 @@ export default function AppDiscover() {
           priority: biz.priority_score >= 70 ? 'high' : biz.priority_score >= 40 ? 'medium' : 'low',
           notes_count: 0,
           last_contacted: '',
+          data_source: biz.data_source || 'provider',
         },
       });
       toast.success(`${biz.business_name} saved as lead!`);

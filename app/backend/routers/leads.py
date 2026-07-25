@@ -37,6 +37,7 @@ class LeadsData(BaseModel):
     priority: str = None
     notes_count: int = None
     last_contacted: str = None
+    data_source: Optional[str] = None
 
 
 class LeadsUpdateData(BaseModel):
@@ -56,6 +57,7 @@ class LeadsUpdateData(BaseModel):
     priority: Optional[str] = None
     notes_count: Optional[int] = None
     last_contacted: Optional[str] = None
+    data_source: Optional[str] = None
 
 
 class LeadsResponse(BaseModel):
@@ -77,6 +79,7 @@ class LeadsResponse(BaseModel):
     priority: Optional[str] = None
     notes_count: Optional[int] = None
     last_contacted: Optional[str] = None
+    data_source: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
