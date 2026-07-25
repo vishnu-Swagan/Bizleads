@@ -1,222 +1,241 @@
+"""MapBox Search Box adapter — Pass 1 of discovery.
+
+Finds real businesses in a place. Returns identity, contact and a candidate
+website URL where MapBox has one on record. It does NOT decide whether a
+website is weak; that is Pass 2 (services/qualification.py).
+
+Why Search Box and not geocoding:
+
+  * The v5 geocoding endpoint this module used to call returns HTTP 200 with
+    an empty feature list for POI queries. Discovery found nothing, always.
+  * Free-text search matches street names. Querying "plumber Manchester"
+    returns "Clumber Road", "Plummer Avenue" and "Lumber Lane" alongside real
+    plumbers, because it is fuzzy text matching over places.
+  * The category endpoint returns only POIs, and their `metadata` carries
+    `website` and `phone` — the fields this product is built on.
+
+On "no website": MapBox having no website on record is a useful signal, not
+proof. The business may have a site MapBox does not know about. So a missing
+website yields has_website=None (unknown) plus an explicit
+`provider_has_no_website` flag, never has_website=False. Only Pass 2, which
+actually tries to fetch a site, may conclude that one is absent.
 """
-MapBox Geocoding & Search API integration for business discovery.
-Uses the Mapbox Search API (v1) for POI (point of interest) search.
-Falls back to AI-powered discovery when access token is not configured.
-"""
-import os
 import logging
+import os
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
+
 import httpx
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-MAPBOX_ACCESS_TOKEN = os.environ.get("MAPBOX_ACCESS_TOKEN")
-MAPBOX_GEOCODING_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places"
-MAPBOX_SEARCH_URL = "https://api.mapbox.com/search/searchbox/v1"
+SEARCHBOX_URL = "https://api.mapbox.com/search/searchbox/v1"
+GEOCODE_V6_URL = "https://api.mapbox.com/search/geocode/v6"
+REQUEST_TIMEOUT = 25.0
+MAX_LIMIT = 25
+
+# The app's category labels mapped to MapBox canonical category IDs, verified
+# against /search/searchbox/v1/list/category. Anything unmapped falls back to
+# a text search filtered to POIs.
+CATEGORY_MAP: Dict[str, str] = {
+    "Restaurant": "restaurant",
+    "Cafe": "cafe",
+    "Coffee Shop": "cafe",
+    "Bar & Pub": "bar",
+    "Bakery": "bakery",
+    "Hair Salon": "hairdresser",
+    "Barbershop": "hairdresser",
+    "Barber Shop": "hairdresser",
+    "Beauty Spa": "spa",
+    "Nail Salon": "nail_salon",
+    "Dentist": "dentist",
+    "Dentistry": "dentist",
+    "Doctor": "doctors_office",
+    "Veterinarian": "veterinarian",
+    "Veterinary": "veterinarian",
+    "Landscaping": "landscaping",
+    "Car Wash": "car_wash",
+    "Yoga Studio": "yoga_studio",
+    "Dance Studio": "dance_studio",
+    "Real Estate Agent": "real_estate_agent",
+    "Insurance Agent": "insurance_broker",
+    "Lawyer": "lawyer",
+    "Legal Services": "lawyer",
+    "Pet Store": "pet_store",
+    "Pet Services": "pet_store",
+    "Florist": "florist",
+    "Dry Cleaner": "dry_cleaners",
+    "Dry Cleaning": "dry_cleaners",
+    "Tailor": "tailor",
+    "Photography Studio": "photographer",
+    "Photography": "photographer",
+    "Tattoo Parlor": "tattoo_parlour",
+    "Tattoo Studio": "tattoo_parlour",
+    "Music School": "music_school",
+    "Driving School": "driving_school",
+}
+
+COUNTRY_CODES: Dict[str, str] = {
+    "United States": "US", "United Kingdom": "GB", "Canada": "CA",
+    "Australia": "AU", "Germany": "DE", "France": "FR", "Spain": "ES",
+    "Italy": "IT", "Netherlands": "NL", "Brazil": "BR", "Mexico": "MX",
+    "India": "IN", "Japan": "JP", "South Korea": "KR", "South Africa": "ZA",
+    "Nigeria": "NG", "UAE": "AE", "Singapore": "SG", "Ireland": "IE",
+    "New Zealand": "NZ", "Portugal": "PT", "Poland": "PL", "Sweden": "SE",
+}
+
+
+def _token() -> Optional[str]:
+    """Read the token at call time, not import time, so .env loading and tests work."""
+    return os.environ.get("MAPBOX_ACCESS_TOKEN")
 
 
 def is_mapbox_configured() -> bool:
-    """Check if MapBox access token is available."""
-    return bool(MAPBOX_ACCESS_TOKEN)
+    return bool(_token())
+
+
+def canonical_category(label: Optional[str]) -> Optional[str]:
+    if not label:
+        return None
+    return CATEGORY_MAP.get(label.strip())
+
+
+async def geocode_location(location_text: str, country: Optional[str] = None) -> Optional[Dict[str, float]]:
+    """Resolve a place name to coordinates, used as search proximity."""
+    token = _token()
+    if not token or not location_text:
+        return None
+
+    params: Dict[str, Any] = {"q": location_text, "access_token": token, "limit": 1, "types": "place,locality,postcode"}
+    if country and (code := COUNTRY_CODES.get(country)):
+        params["country"] = code
+
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.get(f"{GEOCODE_V6_URL}/forward", params=params)
+            if response.status_code != 200:
+                logger.warning("MapBox geocode failed: %s", response.status_code)
+                return None
+            features = response.json().get("features", [])
+            if not features:
+                return None
+            coords = features[0].get("properties", {}).get("coordinates", {})
+            if "longitude" not in coords or "latitude" not in coords:
+                return None
+            return {"longitude": coords["longitude"], "latitude": coords["latitude"]}
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("MapBox geocode error: %s", type(exc).__name__)
+        return None
 
 
 async def search_places(
-    query: str,
+    query: str = "",
     location: Optional[str] = None,
     category: Optional[str] = None,
     country: Optional[str] = None,
     limit: int = 15,
-) -> list[dict]:
-    """
-    Search for businesses using MapBox Search/Geocoding API.
-    Returns a list of business dicts with normalized fields.
-    """
-    if not MAPBOX_ACCESS_TOKEN:
-        logger.warning("MapBox access token not configured, returning empty results")
+) -> List[Dict[str, Any]]:
+    """Find businesses. Category search when the category is known, else text."""
+    token = _token()
+    if not token:
+        logger.warning("MapBox token not configured")
         return []
 
-    # Build the search query
-    search_parts = []
-    if query:
-        search_parts.append(query)
-    if category:
-        search_parts.append(category)
-    if location:
-        search_parts.append(location)
-    if country:
-        search_parts.append(country)
+    limit = max(1, min(limit, MAX_LIMIT))
+    proximity = await geocode_location(location or country or "", country) if (location or country) else None
+    canonical = canonical_category(category)
 
-    text_query = " ".join(search_parts) if search_parts else "local business"
-
-    # Map country names to ISO 3166-1 alpha-2 codes for Mapbox
-    country_codes = {
-        "United States": "us", "United Kingdom": "gb", "Canada": "ca",
-        "Australia": "au", "Germany": "de", "France": "fr",
-        "Spain": "es", "Italy": "it", "Netherlands": "nl",
-        "Brazil": "br", "Mexico": "mx", "India": "in",
-        "Japan": "jp", "South Korea": "kr", "South Africa": "za",
-        "Nigeria": "ng", "UAE": "ae", "Singapore": "sg",
-    }
-
-    # Use Mapbox Geocoding API with POI type filter
-    params = {
-        "access_token": MAPBOX_ACCESS_TOKEN,
-        "types": "poi",
-        "limit": min(limit, 10),  # Mapbox limit is 10 per request
-        "language": "en",
-    }
-
-    # Add country filter if available
-    if country:
-        code = country_codes.get(country)
-        if code:
-            params["country"] = code
+    params: Dict[str, Any] = {"access_token": token, "limit": limit}
+    if country and (code := COUNTRY_CODES.get(country)):
+        params["country"] = code
+    if proximity:
+        params["proximity"] = f"{proximity['longitude']},{proximity['latitude']}"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # URL-encode the query into the path
-            encoded_query = text_query.replace(" ", "%20")
-            url = f"{MAPBOX_GEOCODING_URL}/{encoded_query}.json"
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            if canonical:
+                url = f"{SEARCHBOX_URL}/category/{quote(canonical)}"
+            else:
+                url = f"{SEARCHBOX_URL}/forward"
+                text = " ".join(p for p in [query, category, location] if p) or "business"
+                params["q"] = text
 
             response = await client.get(url, params=params)
-
             if response.status_code != 200:
-                logger.error(f"MapBox API error: {response.status_code} - {response.text[:500]}")
+                logger.error("MapBox search failed: %s %s", response.status_code, response.text[:300])
                 return []
 
-            data = response.json()
-            features = data.get("features", [])
-
-            results = []
-            for feature in features:
-                biz = _normalize_feature(feature, country or "")
-                if biz:
-                    results.append(biz)
-
-            logger.info(f"MapBox returned {len(results)} results for query: {text_query}")
-
-            # If we need more results, do a second request with different phrasing
-            if len(results) < limit and category and location:
-                alt_query = f"{category} near {location}"
-                encoded_alt = alt_query.replace(" ", "%20")
-                alt_url = f"{MAPBOX_GEOCODING_URL}/{encoded_alt}.json"
-                alt_response = await client.get(alt_url, params=params)
-                if alt_response.status_code == 200:
-                    alt_data = alt_response.json()
-                    alt_features = alt_data.get("features", [])
-                    existing_ids = {r.get("mapbox_id") for r in results}
-                    for feature in alt_features:
-                        biz = _normalize_feature(feature, country or "")
-                        if biz and biz.get("mapbox_id") not in existing_ids:
-                            results.append(biz)
-                            existing_ids.add(biz.get("mapbox_id"))
-
-            return results[:limit]
-
-    except httpx.TimeoutException:
-        logger.error("MapBox API timeout")
+            features = response.json().get("features", [])
+    except httpx.HTTPError as exc:
+        logger.error("MapBox search error: %s", type(exc).__name__)
         return []
-    except Exception as e:
-        logger.error(f"MapBox API error: {e}")
+    except ValueError:
+        logger.error("MapBox returned malformed JSON")
         return []
 
+    results = []
+    for feature in features:
+        # Free-text search returns streets and addresses alongside businesses.
+        if feature.get("properties", {}).get("feature_type") != "poi":
+            continue
+        normalised = _normalize_feature(feature, country or "")
+        if normalised:
+            results.append(normalised)
 
-async def geocode_location(location_text: str) -> Optional[dict]:
-    """Geocode a location string to coordinates using MapBox."""
-    if not MAPBOX_ACCESS_TOKEN:
-        return None
+    logger.info("MapBox returned %d POIs (%d raw features)", len(results), len(features))
+    return results[:limit]
 
+
+def _normalize_feature(feature: Dict[str, Any], country: str) -> Optional[Dict[str, Any]]:
+    """Map a Search Box POI into the shape scoring expects."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            encoded = location_text.replace(" ", "%20")
-            url = f"{MAPBOX_GEOCODING_URL}/{encoded}.json"
-            params = {
-                "access_token": MAPBOX_ACCESS_TOKEN,
-                "types": "place,locality,neighborhood",
-                "limit": 1,
-            }
-            response = await client.get(url, params=params)
-
-            if response.status_code != 200:
-                return None
-
-            data = response.json()
-            features = data.get("features", [])
-            if features:
-                coords = features[0].get("center", [])
-                return {
-                    "longitude": coords[0] if len(coords) > 0 else None,
-                    "latitude": coords[1] if len(coords) > 1 else None,
-                    "place_name": features[0].get("place_name", ""),
-                }
+        props = feature.get("properties", {})
+        if not props:
             return None
 
-    except Exception as e:
-        logger.error(f"MapBox geocoding error: {e}")
-        return None
+        name = props.get("name") or "Unknown Business"
+        metadata = props.get("metadata") or {}
+        context = props.get("context") or {}
 
+        place = (context.get("place") or {}).get("name", "")
+        neighborhood = (context.get("neighborhood") or {}).get("name", "")
+        resolved_country = (context.get("country") or {}).get("name", "") or country
 
-def _normalize_feature(feature: dict, country: str) -> Optional[dict]:
-    """Normalize a MapBox feature into BizLeads business format."""
-    try:
-        properties = feature.get("properties", {})
-        # For geocoding API v5, data is in the feature directly
-        name = feature.get("text", "") or properties.get("name", "Unknown Business")
-        place_name = feature.get("place_name", "")
+        location = ", ".join(p for p in [neighborhood, place] if p) or props.get("place_formatted", "")
 
-        # Extract category from the feature
-        categories = feature.get("properties", {}).get("category", "")
-        if isinstance(categories, list):
-            category = categories[0] if categories else "Local Business"
-        elif isinstance(categories, str):
-            category = categories.split(",")[0].strip() if categories else "Local Business"
-        else:
-            category = "Local Business"
+        categories = props.get("poi_category") or []
+        category = categories[0].title() if categories else "Local Business"
 
-        # Format category nicely
-        category = category.replace("_", " ").title() if category else "Local Business"
+        website = (metadata.get("website") or "").strip() or None
+        phone = (metadata.get("phone") or "").strip() or None
 
-        # Extract address components
-        address = place_name or ""
-        context = feature.get("context", [])
-        city = ""
-        region = ""
-        for ctx in context:
-            ctx_id = ctx.get("id", "")
-            if ctx_id.startswith("place"):
-                city = ctx.get("text", "")
-            elif ctx_id.startswith("region"):
-                region = ctx.get("text", "")
-
-        short_address = f"{city}, {region}" if city else address
-
-        # MapBox geocoding returns no website, phone or social data. Those fields
-        # are therefore UNKNOWN, not absent — and they must stay distinguishable.
-        #
-        # This previously returned has_website=False, which scoring.py reads as a
-        # confirmed "no website" and scores Need at 90. Every real business came
-        # back labelled "No Website" whether or not it had one: a fabricated
-        # verdict on a real business. None means "not checked"; only the
-        # enrichment pass may set it True or False.
         return {
             "business_name": name,
             "category": category,
-            "location": short_address or address,
-            "country": country,
-            "website_url": None,
+            "location": location,
+            "country": resolved_country,
+            "full_address": props.get("full_address", ""),
+            # A website on record means one exists. No website on record is a
+            # signal, not proof — hence None, plus the explicit flag below.
+            "website_url": website,
+            "has_website": True if website else None,
+            "provider_has_no_website": website is None,
             "website_score": None,
             "social_score": None,
-            "has_website": None,
-            "contact_email": None,
-            "contact_phone": None,
-            "mapbox_id": feature.get("id", ""),
-            "coordinates": feature.get("center", []),
             "website_state": "unknown",
+            "contact_phone": phone,
+            "contact_email": None,
+            "mapbox_id": props.get("mapbox_id", ""),
+            "coordinates": [
+                (props.get("coordinates") or {}).get("longitude"),
+                (props.get("coordinates") or {}).get("latitude"),
+            ],
+            "open_hours": bool(metadata.get("open_hours")),
             "data_source": "provider",
             "provider": "mapbox",
             "timing_signal": "",
             "qualification_required": True,
         }
-    except Exception as e:
-        logger.error(f"Error normalizing MapBox feature: {e}")
+    except (AttributeError, TypeError, IndexError) as exc:
+        logger.error("Error normalising MapBox feature: %s", type(exc).__name__)
         return None

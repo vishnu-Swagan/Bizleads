@@ -86,38 +86,71 @@ class TestConfidenceReflectsEvidence:
         assert "ai-inferred" not in factors
 
 
-class TestProviderAdapter:
-    def test_mapbox_does_not_claim_a_business_has_no_website(self):
-        feature = {
-            "id": "poi.123",
-            "text": "Riverside Cafe",
-            "place_name": "Riverside Cafe, Leeds, United Kingdom",
-            "center": [-1.55, 53.80],
-            "properties": {"category": "cafe"},
-            "context": [{"id": "place.1", "text": "Leeds"}],
+def _searchbox_poi(name: str, website: str | None = None, phone: str | None = None) -> dict:
+    """A Search Box POI feature, shaped as the live API actually returns one."""
+    metadata: dict = {}
+    if website:
+        metadata["website"] = website
+    if phone:
+        metadata["phone"] = phone
+    return {
+        "properties": {
+            "name": name,
+            "mapbox_id": "dXJuOm1ieHBvaTox",
+            "feature_type": "poi",
+            "full_address": f"1 Test St, Leeds, United Kingdom",
+            "place_formatted": "Leeds, United Kingdom",
+            "poi_category": ["café", "food"],
+            "coordinates": {"longitude": -1.55, "latitude": 53.80},
+            "context": {
+                "country": {"name": "United Kingdom"},
+                "place": {"name": "Leeds"},
+                "neighborhood": {"name": "Farnley"},
+            },
+            "metadata": metadata,
         }
+    }
 
-        biz = _normalize_feature(feature, "United Kingdom")
+
+class TestProviderAdapter:
+    def test_no_website_on_record_is_unknown_not_absent(self):
+        # MapBox not knowing a website is a signal, not proof — the business may
+        # have one MapBox has never seen. Only Pass 2 may conclude absence.
+        biz = _normalize_feature(_searchbox_poi("Riverside Cafe"), "United Kingdom")
 
         assert biz["business_name"] == "Riverside Cafe"
         assert biz["has_website"] is None, "must be unknown, never False"
+        assert biz["provider_has_no_website"] is True
+        assert biz["website_url"] is None
         assert biz["website_score"] is None
-        assert biz["social_score"] is None
         assert biz["website_state"] == "unknown"
         assert biz["qualification_required"] is True
 
-    def test_a_mapbox_result_scores_as_unqualified_end_to_end(self):
-        feature = {
-            "id": "poi.456",
-            "text": "Northgate Plumbing",
-            "place_name": "Northgate Plumbing, Manchester",
-            "center": [-2.24, 53.48],
-            "properties": {"category": "plumber"},
-            "context": [{"id": "place.2", "text": "Manchester"}],
-        }
+    def test_website_on_record_is_carried_through_for_pass_two(self):
+        biz = _normalize_feature(
+            _searchbox_poi("Jasmine Cafe", website="https://www.jasminecafe.co.uk/", phone="+441130000000"),
+            "United Kingdom",
+        )
 
-        scored = build_score_breakdown(_normalize_feature(feature, "United Kingdom"))
+        assert biz["website_url"] == "https://www.jasminecafe.co.uk/"
+        assert biz["has_website"] is True
+        assert biz["provider_has_no_website"] is False
+        assert biz["contact_phone"] == "+441130000000"
+        # Having a site says nothing about its quality until it is audited.
+        assert biz["website_score"] is None
+        assert biz["website_state"] == "unknown"
+
+    def test_a_mapbox_result_scores_as_unqualified_end_to_end(self):
+        scored = build_score_breakdown(
+            _normalize_feature(_searchbox_poi("Northgate Plumbing"), "United Kingdom")
+        )
 
         assert scored["priority_score"] is None
         assert scored["website_state"] == "unknown"
         assert scored["qualification_required"] is True
+
+    def test_non_poi_features_are_not_businesses(self):
+        # Free-text search returns streets. "plumber Manchester" really does
+        # return "Clumber Road" and "Lumber Lane" from the live API.
+        street = {"properties": {"name": "Clumber Road", "feature_type": "street"}}
+        assert street["properties"]["feature_type"] != "poi"
