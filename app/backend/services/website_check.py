@@ -34,6 +34,7 @@ Do not replace the manual redirect loop with `follow_redirects=True`.
 """
 import asyncio
 import ipaddress
+import time
 import logging
 import socket
 from datetime import datetime, timezone
@@ -63,6 +64,11 @@ class WebsiteCheck(TypedDict):
     reason: str
     redirect_hops: int
     checked_at: str
+    # Response body and timings, carried so the quality tier can score the page
+    # without issuing a second request. Transient — not persisted.
+    html: Optional[str]
+    elapsed_seconds: Optional[float]
+    content_bytes: Optional[int]
     # None when the check could not reach a conclusion (unreachable/blocked).
     # Callers must not coerce this to False — that is the bug this whole
     # module exists to avoid.
@@ -196,6 +202,9 @@ async def check_website(raw_url: Optional[str]) -> WebsiteCheck:
         "redirect_hops": 0,
         "checked_at": checked_at,
         "has_website": None,
+        "html": None,
+        "elapsed_seconds": None,
+        "content_bytes": None,
     }
 
     if url is None:
@@ -228,6 +237,7 @@ async def check_website(raw_url: Optional[str]) -> WebsiteCheck:
                 )
                 return base
 
+            request_started = time.perf_counter()
             try:
                 response = await client.get(current)
             except httpx.TimeoutException:
@@ -280,6 +290,9 @@ async def check_website(raw_url: Optional[str]) -> WebsiteCheck:
             parked = _looks_parked(body, current)
             base.update(
                 {
+                    "html": body,
+                    "elapsed_seconds": round(time.perf_counter() - request_started, 3),
+                    "content_bytes": len(response.content),
                     "final_url": current,
                     "state": "parked" if parked else "live",
                     "status_code": response.status_code,

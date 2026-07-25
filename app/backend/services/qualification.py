@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from services.pagespeed import audit_website, is_pagespeed_configured
+from services.site_signals import analyse
 from services.website_check import check_website
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,17 @@ AUDIT_WEIGHTS = {
     "best_practices_score": 0.15,
 }
 SCORE_VERSION = "website-quality-1.0.0"
+
+
+def band_for_score(score: int) -> str:
+    """Map a 0-100 website score onto the quality bands used across the app."""
+    if score < 15:
+        return "parked"
+    if score < 40:
+        return "weak"
+    if score < 70:
+        return "moderate"
+    return "healthy"
 
 
 def _blend_audit_scores(audit: Dict[str, Any]) -> Optional[int]:
@@ -66,6 +78,8 @@ async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
         "website_score": None,
         "website_state": "unknown",
         "audit": None,
+        "findings": [],
+        "evidence_tier": None,
         "audit_available": is_pagespeed_configured(),
         "evidence": {
             "website_check": check,
@@ -95,38 +109,56 @@ async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
         result["website_state"] = "no_website" if check["has_website"] is False else "unreachable"
         return result
 
-    # state == "live": the site exists. Quality needs the audit.
-    if not is_pagespeed_configured():
-        result["website_state"] = "unknown"
-        result["evidence"]["quality_note"] = (
-            "Site is live but unaudited — connect PageSpeed Insights to measure quality"
+    # state == "live": the site exists, so quality is measurable.
+    #
+    # Three tiers, best available wins, and the result always records which one
+    # produced the score so nobody mistakes a heuristic for a Lighthouse run:
+    #
+    #   heuristic  — free, instant, from bytes already fetched. Always runs.
+    #   lighthouse — local Chrome, no API key, slower. Optional.
+    #   pagespeed  — Google's hosted Lighthouse, needs a free key. Optional.
+    #
+    # The heuristic tier runs first and unconditionally: even when a deeper tier
+    # is available, its findings are the human-readable "here is what is wrong
+    # with your site" list that a deeper score alone does not give you.
+    heuristic = None
+    if check.get("html"):
+        heuristic = analyse(
+            check["html"],
+            final_url=check["final_url"] or raw_url or "",
+            elapsed_seconds=check.get("elapsed_seconds"),
+            content_bytes=check.get("content_bytes"),
         )
-        return result
-
-    audit = await audit_website(check["final_url"] or raw_url or "")
-    if not audit or audit.get("error"):
-        result["website_state"] = "unknown"
-        result["evidence"]["quality_note"] = (
-            f"Audit unavailable: {audit.get('message') if audit else 'no response'}"
-        )
-        return result
-
-    score = _blend_audit_scores(audit)
-    result["audit"] = audit
-    result["website_score"] = score
-
-    if score is None:
-        result["website_state"] = "unknown"
-        result["evidence"]["quality_note"] = "Audit returned no category scores"
-        return result
-
-    if score < 15:
-        result["website_state"] = "parked"
-    elif score < 40:
-        result["website_state"] = "weak"
-    elif score < 70:
-        result["website_state"] = "moderate"
+        result["website_score"] = heuristic["website_score"]
+        result["website_state"] = heuristic["website_state"]
+        result["findings"] = heuristic["findings"]
+        result["evidence"]["heuristic"] = {
+            "signals": heuristic["signals"],
+            "score_version": heuristic["score_version"],
+        }
+        result["evidence_tier"] = heuristic["evidence_tier"]
     else:
-        result["website_state"] = "healthy"
+        result["evidence"]["quality_note"] = "Site responded but returned no readable HTML"
+
+    audit = None
+    if is_pagespeed_configured():
+        audit = await audit_website(check["final_url"] or raw_url or "")
+
+    if audit and not audit.get("error"):
+        score = _blend_audit_scores(audit)
+        if score is not None:
+            # A real Lighthouse run supersedes the heuristic score, but the
+            # heuristic findings stay — they are the sales evidence.
+            result["audit"] = audit
+            result["website_score"] = score
+            result["website_state"] = band_for_score(score)
+            result["evidence_tier"] = "pagespeed"
+            result["evidence"]["audit_score_version"] = SCORE_VERSION
+        else:
+            result["evidence"]["quality_note"] = "Audit returned no category scores"
+    elif audit and audit.get("error"):
+        result["evidence"]["quality_note"] = f"Audit unavailable: {audit.get('message')}"
+    elif heuristic is None:
+        result["website_state"] = "unknown"
 
     return result
