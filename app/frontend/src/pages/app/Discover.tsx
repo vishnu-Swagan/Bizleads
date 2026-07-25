@@ -335,7 +335,7 @@ export default function AppDiscover() {
               <div className="flex items-center gap-3">
                 <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-indigo-900">AI Discovery Running</p>
+                  <p className="text-sm font-medium text-indigo-900">Discovery Running</p>
                   <p className="text-xs text-indigo-700">Analyzing businesses, scoring buyability and timing signals...</p>
                 </div>
               </div>

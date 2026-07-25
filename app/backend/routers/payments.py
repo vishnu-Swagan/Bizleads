@@ -134,29 +134,7 @@ async def get_usage(
     db: AsyncSession = Depends(get_db),
 ):
     """Get current workspace usage and entitlements"""
-    result = await db.execute(
-        select(Workspaces).where(Workspaces.owner_id == current_user.id)
-    )
-    workspace = result.scalar_one_or_none()
-
-    if not workspace:
-        # Create default trial workspace
-        user_email = getattr(current_user, 'email', None) or 'User'
-        workspace = Workspaces(
-            name=f"{user_email}'s Workspace",
-            slug=current_user.id[:8],
-            owner_id=current_user.id,
-            plan="trial",
-            subscription_status="trialing",
-            monthly_credits=25,
-            credits_used=0,
-            max_seats=1,
-            trial_ends_at=(datetime.utcnow() + timedelta(days=7)).isoformat(),
-            credits_reset_at=(datetime.utcnow() + timedelta(days=30)).isoformat(),
-        )
-        db.add(workspace)
-        await db.commit()
-        await db.refresh(workspace)
+    workspace = await ensure_workspace_for_user(current_user, db)
 
     plan_info = PLANS.get(workspace.plan, PLANS["trial"])
     credits_remaining = workspace.monthly_credits - workspace.credits_used
@@ -309,7 +287,7 @@ async def verify_payment(
     existing = await db.execute(
         select(Credit_ledger).where(Credit_ledger.reference_id == session.id)
     )
-    if existing.scalar_one_or_none():
+    if existing.scalars().first():
         # Already applied. Report current state; mutate nothing.
         return {
             "status": "active",
@@ -355,9 +333,9 @@ async def deduct_credit(
 ):
     """Deduct one credit for a search/action"""
     result = await db.execute(
-        select(Workspaces).where(Workspaces.owner_id == current_user.id)
+        select(Workspaces).where(Workspaces.owner_id == current_user.id).order_by(Workspaces.id.asc()).limit(1)
     )
-    workspace = result.scalar_one_or_none()
+    workspace = result.scalars().first()
 
     if not workspace:
         raise HTTPException(status_code=404, detail="No workspace found")

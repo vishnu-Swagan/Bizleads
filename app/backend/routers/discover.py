@@ -65,9 +65,9 @@ async def estimate_search(
     """Estimate credit cost and processing time before running search"""
     # Get workspace credits
     result = await db.execute(
-        select(Workspaces).where(Workspaces.owner_id == current_user.id)
+        select(Workspaces).where(Workspaces.owner_id == current_user.id).order_by(Workspaces.id.asc()).limit(1)
     )
-    workspace = result.scalar_one_or_none()
+    workspace = result.scalars().first()
 
     credits_remaining = 0
     if workspace:

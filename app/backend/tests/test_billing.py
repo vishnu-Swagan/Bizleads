@@ -34,6 +34,45 @@ async def _seed_workspace(db_session):
     return workspace
 
 
+async def test_usage_creates_trial_workspace_for_new_user(user_a_client, db_session):
+    # No workspace exists yet for USER_A_ID; the endpoint must create one with
+    # the same trial defaults ensure_workspace_for_user establishes elsewhere,
+    # and the response shape must be unchanged.
+    response = await user_a_client.get("/api/v1/billing/usage")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["plan"] == "trial"
+    assert body["plan_name"] == "Trial"
+    assert body["subscription_status"] == "trialing"
+    assert body["credits_total"] == 25
+    assert body["credits_used"] == 0
+    assert body["credits_remaining"] == 25
+    assert body["max_seats"] == 1
+    assert body["trial_ends_at"]
+    assert body["credits_reset_at"]
+
+    workspaces = (await db_session.execute(
+        select(Workspaces).where(Workspaces.owner_id == USER_A_ID)
+    )).scalars().all()
+    assert len(workspaces) == 1, "usage endpoint did not create exactly one workspace"
+
+
+async def test_usage_does_not_create_second_workspace_on_repeat_call(user_a_client, db_session):
+    first = await user_a_client.get("/api/v1/billing/usage")
+    assert first.status_code == 200
+    first_workspace_id = first.json()["workspace_id"]
+
+    second = await user_a_client.get("/api/v1/billing/usage")
+    assert second.status_code == 200
+    assert second.json()["workspace_id"] == first_workspace_id
+
+    workspaces = (await db_session.execute(
+        select(Workspaces).where(Workspaces.owner_id == USER_A_ID)
+    )).scalars().all()
+    assert len(workspaces) == 1, "repeat call to /billing/usage created a duplicate workspace"
+
+
 async def test_foreign_session_is_rejected(user_a_client, db_session, monkeypatch):
     await _seed_workspace(db_session)
     monkeypatch.setattr(

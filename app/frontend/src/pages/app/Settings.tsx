@@ -163,7 +163,7 @@ export default function AppSettings() {
               <CardContent>
                 <div className="space-y-3">
                   {[
-                    { name: 'Google Places API', desc: 'Live business discovery', status: 'not_configured' },
+                    { name: 'MapBox Places API', desc: 'Live business discovery', status: 'not_configured' },
                     { name: 'PageSpeed Insights', desc: 'Website performance audits', status: 'not_configured' },
                     { name: 'Email Sender (SMTP/Gmail)', desc: 'Outreach delivery', status: 'not_configured' },
                   ].map((intg) => (
@@ -182,8 +182,8 @@ export default function AppSettings() {
                   ))}
                 </div>
                 <p className="text-xs text-slate-500 mt-4">
-                  Provider integrations enable live discovery, audits, and outreach. 
-                  Without them, BizLeads uses AI-powered analysis.
+                  Discovery requires a connected provider. Add a MapBox access token to run
+                  searches — without one, Discover returns no results.
                 </p>
               </CardContent>
             </Card>

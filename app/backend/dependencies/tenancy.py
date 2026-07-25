@@ -71,8 +71,8 @@ async def ensure_workspace_for_user(user: UserResponse, db: AsyncSession) -> Wor
     """Resolve the user's workspace, creating a trial one if absent.
 
     The only sanctioned creation point. Called from GET /billing/usage and
-    POST /discover/run so the three previously-divergent copies of this logic
-    behave identically.
+    POST /discover/run, and from POST /billing/verify-payment to resolve the
+    workspace being upgraded, so all call sites behave identically.
 
     owner_id has no unique constraint (models/workspaces.py only indexes it),
     so two concurrent first requests from the same user can both find nothing
