@@ -4,6 +4,12 @@ from datetime import datetime
 from typing import Optional
 
 from core.auth import AccessTokenError, decode_access_token
+from core.supabase_auth import (
+    SupabaseTokenError,
+    claims_to_user,
+    is_supabase_auth_configured,
+    verify_supabase_token,
+)
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from schemas.auth import UserResponse
@@ -11,6 +17,24 @@ from schemas.auth import UserResponse
 logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _looks_like_supabase_token(token: str) -> bool:
+    """Best-effort issuer sniff, used only to choose which error to report.
+
+    Never used to decide whether to trust a token — that is always the
+    verifier's job. Reads the unverified payload, so nothing here may be
+    treated as authoritative.
+    """
+    import base64
+    import json
+
+    try:
+        payload = token.split(".")[1]
+        decoded = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except Exception:
+        return False
+    return "supabase" in str(decoded.get("iss", "")).lower() or decoded.get("aud") == "authenticated"
 
 
 async def get_bearer_token(
@@ -25,7 +49,39 @@ async def get_bearer_token(
 
 
 async def get_current_user(token: str = Depends(get_bearer_token)) -> UserResponse:
-    """Dependency to get current authenticated user via JWT token."""
+    """Resolve the caller from their bearer token.
+
+    Two issuers are accepted during the migration off Atoms Cloud:
+
+      * Supabase — tried first when configured, verified against the project's
+        published ES256 JWKS (see core/supabase_auth).
+      * Atoms Cloud — the original app-issued HS256 token.
+
+    Both are fully verified; neither is trusted on the strength of its own
+    header. When Supabase auth is configured and the token is a Supabase token,
+    a failure there is returned as-is rather than silently retried against the
+    legacy path, so a bad Supabase token cannot be mistaken for a legacy one.
+    """
+    if is_supabase_auth_configured():
+        try:
+            claims = await verify_supabase_token(token)
+        except SupabaseTokenError as exc:
+            # Only fall through when this is plainly not a Supabase token —
+            # otherwise report the real reason.
+            if _looks_like_supabase_token(token):
+                logger.info("Supabase token rejected: %s", exc)
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+            logger.debug("Not a Supabase token, trying legacy issuer")
+        else:
+            user = claims_to_user(claims)
+            if not user["id"]:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token"
+                )
+            return UserResponse(
+                id=user["id"], email=user["email"], name=user["name"], role=user["role"], last_login=None
+            )
+
     try:
         payload = decode_access_token(token)
     except AccessTokenError as exc:
