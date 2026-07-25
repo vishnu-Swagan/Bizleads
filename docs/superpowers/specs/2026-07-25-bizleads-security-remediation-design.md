@@ -85,7 +85,9 @@ Each entity router declares one policy at module level.
 | `offer_profiles` | workspace | all fields | — genuinely user-owned data |
 | `leads` | user | unchanged | — only `/all` is removed |
 | `lead_notes` | user | unchanged | — only `/all` is removed |
-| `ai_interaction_logs` | user | *nothing* (read-only) | — only `/all` is removed |
+| `ai_interaction_logs` | user | unchanged | — only `/all` is removed |
+
+`leads`, `lead_notes` and `ai_interaction_logs` receive **no policy** in this tier. Their remaining routes already carry `get_current_user` and per-user scoping; only the unauthenticated `/all` route is deleted. They appear in this table solely to state that explicitly.
 
 Rationale for the two non-obvious rows: `provider_connections.config_json` stays writable so a future integrations settings page needs no redesign, but never leaves the server. `workspace_members` is read-only because there is no invitation flow to write against — making it writable now would be designing for a feature that does not exist.
 
@@ -101,11 +103,15 @@ Rationale for the two non-obvious rows: `provider_connections.config_json` stays
 
 ### 4.1 Authentication and scoping
 
-Apply `get_current_user` plus the policy helpers to all routes in: `workspaces`, `workspace_members`, `credit_ledger`, `provider_connections`, `offer_profiles`, `search_jobs`. Approximately 54 routes.
+Six routers — `workspaces`, `workspace_members`, `credit_ledger`, `provider_connections`, `offer_profiles`, `search_jobs` — carry nine routes each (`GET ""`, `GET /all`, `GET /{id}`, `POST ""`, `POST /batch`, `PUT /batch`, `PUT /{id}`, `DELETE /batch`, `DELETE /{id}`), 54 in total, verified by count.
+
+Of those: the six `/all` routes are **deleted** (§4.2); the remaining **48 receive** `get_current_user` plus the policy helpers.
 
 ### 4.2 Delete `/all` routes
 
-Remove from `routers/leads.py:159`, `routers/lead_notes.py`, `routers/ai_interaction_logs.py`. Verified unused — the frontend calls `.query`, which maps to `GET ""`.
+Nine in total: the three on `routers/leads.py:159`, `routers/lead_notes.py` and `routers/ai_interaction_logs.py`, plus one on each of the six routers in §4.1.
+
+A route that returns every tenant's rows unscoped has no legitimate use, so these are deleted rather than secured. Verified unused — the frontend calls `.query`, which maps to `GET ""`.
 
 ### 4.3 CORS
 
@@ -161,7 +167,19 @@ Two surfaces. The existing design system (shadcn/ui + Tailwind, slate neutrals, 
 
 **Discover — zero matches.** Separate empty state with filter-widening suggestions. Never a blank region.
 
-**`data_source` badge** on Leads and Lead Detail. Existing `Badge` component: green for `provider`, amber for NULL/unverified, slate for `mock`. Colour is never the only signal — each badge carries text plus a `title` explaining what the source means, because this badge determines whether a phone number should be trusted.
+**`data_source` badge** on Leads and Lead Detail, using the existing `Badge` component:
+
+| Value | Colour | Label |
+|---|---|---|
+| `provider` | green | Verified source |
+| `manual` | slate | Added manually |
+| `ai_generated` | red | AI-generated — unverified |
+| `mock` | slate, muted | Sample data |
+| NULL | amber | Unverified |
+
+Colour is never the only signal — each badge carries its label text plus a `title` explaining what the source means, because this badge determines whether a phone number should be trusted. `ai_generated` gets red rather than amber because, unlike a NULL row of unknown provenance, it is known to be fabricated.
+
+Note that once §4.8 lands, **no code path writes `ai_generated`** — the three producers are gone, and the backfill leaves pre-existing rows NULL because their provenance genuinely cannot be determined retroactively. The value is retained so a user can tag a row they personally know came from the old AI path.
 
 **Toasts** get `role="alert"` so errors are announced, not merely rendered red.
 
@@ -188,7 +206,7 @@ Two client fixtures: `anon_client` (no dependency override, so 401s are genuine)
 
 ### Cases
 
-1. **Anonymous access** — parametrized across every route in the six routers → 401; the three deleted `/all` paths → 404. Parametrization is the point: it catches the route someone forgets.
+1. **Anonymous access** — parametrized across the 48 surviving routes in the six routers → 401; the nine deleted `/all` paths → 404. Parametrization is the point: it catches the route someone forgets.
 2. **Cross-tenant** — user A creates a record; user B attempts read/update/delete by ID → 404.
 3. **Write allowlist** — authenticated PUT of `plan` / `monthly_credits` / `subscription_status` on the caller's *own* workspace → 400, with the DB value asserted unchanged. This proves auth alone would have been insufficient.
 4. **Write-only field** — `config_json` never appears in any `provider_connections` response body.
