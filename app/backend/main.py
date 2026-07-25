@@ -69,7 +69,11 @@ async def lifespan(app: FastAPI):
 
     # MODULE_STARTUP_START
     await initialize_database()
-    await initialize_mock_data()
+    if os.environ.get("SEED_MOCK_DATA", "").lower() in ("true", "1", "yes"):
+        logger.info("SEED_MOCK_DATA is set; loading sample records")
+        await initialize_mock_data()
+    else:
+        logger.info("Mock data seeding disabled (set SEED_MOCK_DATA=true to enable)")
     await initialize_admin_user()
     # MODULE_STARTUP_END
 
