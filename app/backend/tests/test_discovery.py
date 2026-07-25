@@ -21,12 +21,24 @@ async def _seed_workspace(db_session, credits_used=0):
 
 @pytest.fixture(autouse=True)
 def _forbid_ai_discovery(monkeypatch):
-    """Any call to the AI generator during discovery is a test failure."""
+    """Any call to the AI generator during discovery is a test failure.
+
+    Patched in two places on purpose, not redundantly. `business_search` is the
+    source module; `discover` is where a future regression would actually land.
+    A direct `from services.business_search import generate_search_results` in
+    discover.py (the same import style already used for is_mapbox_configured /
+    search_places) binds that name into discover's namespace at import time, so
+    patching only business_search.generate_search_results would not intercept
+    a call made via discover.generate_search_results. Neither discover.*
+    target exists today (raising=False is correct for both) - the point is to
+    pre-empt a reintroduced import, not to patch something currently present.
+    """
     async def _explode(*args, **kwargs):
         raise AssertionError("AI fabrication path was invoked")
 
     monkeypatch.setattr(business_search, "generate_search_results", _explode)
     monkeypatch.setattr(discover, "discover_businesses", _explode, raising=False)
+    monkeypatch.setattr(discover, "generate_search_results", _explode, raising=False)
 
 
 async def test_unconfigured_provider_returns_setup_state(user_a_client, db_session, monkeypatch):
