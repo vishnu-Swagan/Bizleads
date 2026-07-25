@@ -132,46 +132,6 @@ async def query_ai_interaction_logss(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/all", response_model=Ai_interaction_logsListResponse)
-async def query_ai_interaction_logss_all(
-    query: str = Query(None, description='Query conditions as JSON, e.g. {"id":2} or {"id":{"$gte":2}}'),
-    sort: str = Query(None, description="Sort field (prefix with '-' for descending)"),
-    skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(20, ge=1, le=2000, description="Max number of records to return"),
-    fields: str = Query(None, description="Comma-separated list of fields to return"),
-    db: AsyncSession = Depends(get_db),
-):
-    # Query ai_interaction_logss with filtering, sorting, and pagination without user limitation
-    logger.debug(f"Querying ai_interaction_logss: query={query}, sort={sort}, skip={skip}, limit={limit}, fields={fields}")
-
-    service = Ai_interaction_logsService(db)
-    try:
-        # Parse query JSON if provided
-        query_dict = None
-        if query:
-            try:
-                query_dict = json.loads(query)
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="Invalid query JSON format")
-
-        result = await service.get_list(
-            skip=skip,
-            limit=limit,
-            query_dict=query_dict,
-            sort=sort
-        )
-        logger.debug(f"Found {result['total']} ai_interaction_logss")
-        return result
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.warning(f"Invalid ai_interaction_logs query: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error querying ai_interaction_logss: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
 @router.get("/{id}", response_model=Ai_interaction_logsResponse)
 async def get_ai_interaction_logs(
     id: int,
