@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import AppShell from '@/components/AppShell';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -71,6 +72,7 @@ interface Estimate {
 
 export default function AppDiscover() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [filters, setFilters] = useState<Filters | null>(null);
   const [query, setQuery] = useState('');
   const [country, setCountry] = useState('all');
@@ -146,10 +148,22 @@ export default function AppDiscover() {
         options: { timeout: 120000 },
       });
 
+      const status = res.data?.status;
       setResults(res.data?.results || []);
-      setJobStatus('complete');
-      setDataSource(res.data?.data_source || 'ai');
-      toast.success(`Found ${res.data?.total_results || 0} businesses · ${res.data?.credits_charged || 0} credit(s) used`);
+      setDataSource(res.data?.data_source || '');
+
+      if (status === 'provider_unconfigured') {
+        setJobStatus('provider_unconfigured');
+        toast.error(res.data?.message || 'No discovery provider is connected.');
+      } else if (status === 'no_matches') {
+        setJobStatus('no_matches');
+        toast.info('No businesses matched those filters.');
+      } else {
+        setJobStatus('complete');
+        toast.success(
+          `Found ${res.data?.total_results || 0} businesses · ${res.data?.credits_charged || 0} credit(s) used`
+        );
+      }
     } catch (err: any) {
       const detail = err?.data?.detail;
       if (detail?.error === 'insufficient_credits') {
@@ -349,12 +363,60 @@ export default function AppDiscover() {
         )}
 
         {/* Results */}
-        {!searching && hasSearched && results.length === 0 && jobStatus !== 'quota_exceeded' && (
-          <div className="flex flex-col items-center py-12 text-center">
-            <AlertCircle className="mb-3 h-10 w-10 text-slate-300" />
-            <p className="text-slate-600 font-medium">No businesses found</p>
-            <p className="text-sm text-slate-500 mt-1">Try adjusting your filters or broadening your search.</p>
-          </div>
+        {!searching &&
+          hasSearched &&
+          results.length === 0 &&
+          jobStatus !== 'quota_exceeded' &&
+          jobStatus !== 'provider_unconfigured' &&
+          jobStatus !== 'no_matches' && (
+            <div className="flex flex-col items-center py-12 text-center">
+              <AlertCircle className="mb-3 h-10 w-10 text-slate-300" />
+              <p className="text-slate-600 font-medium">No businesses found</p>
+              <p className="text-sm text-slate-500 mt-1">Try adjusting your filters or broadening your search.</p>
+            </div>
+          )}
+
+        {jobStatus === 'provider_unconfigured' && (
+          <Card className="border-amber-200 bg-amber-50/50">
+            <CardHeader>
+              <CardTitle className="text-base text-slate-900">No discovery provider connected</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-slate-600">
+                Business discovery needs a connected data provider. Without one, BizLeads will not
+                return results — it will never invent businesses to fill the gap.
+              </p>
+              <p className="text-sm text-slate-600">
+                Add a MapBox access token to enable searching. No credits were charged.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-slate-200 cursor-pointer"
+                onClick={() => navigate('/app/settings/workspace')}
+              >
+                Go to Settings
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {jobStatus === 'no_matches' && (
+          <Card className="border-slate-200">
+            <CardHeader>
+              <CardTitle className="text-base text-slate-900">No businesses matched</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-sm text-slate-600">
+                The provider ran your search and returned nothing. Try widening it:
+              </p>
+              <ul className="text-sm text-slate-600 list-disc pl-5 space-y-1">
+                <li>Remove the category filter, or pick a broader one</li>
+                <li>Search a larger city or drop the city entirely</li>
+                <li>Set Website State back to “All States”</li>
+              </ul>
+            </CardContent>
+          </Card>
         )}
 
         {results.length > 0 && (
@@ -364,14 +426,8 @@ export default function AppDiscover() {
                 <span className="font-medium text-slate-900">{results.length}</span> businesses found · sorted by Priority Score
               </p>
               <div className="flex items-center gap-2">
-                {filters?.google_places_connected && (
-                  <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
-                    <Globe className="h-3 w-3 mr-1" />
-                    Google Places
-                  </Badge>
-                )}
-                <Badge variant="outline" className="text-xs border-slate-200 text-slate-500">
-                  Source: {dataSource === 'google_places' ? 'Google Places API' : 'AI Discovery'}
+                <Badge variant="outline" className="text-xs border-green-200 text-green-700 bg-green-50">
+                  Source: MapBox Places
                 </Badge>
               </div>
             </div>
