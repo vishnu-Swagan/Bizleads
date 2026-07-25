@@ -9,7 +9,9 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from dependencies.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException, status
+from schemas.auth import UserResponse
 from schemas.aihub import (
     AnalyzePdfRequest,
     AnalyzePdfResponse,
@@ -116,6 +118,7 @@ router = APIRouter(prefix="/api/v1/aihub", tags=["aihub"])
 @router.post("/gentxt")
 async def generate_text(
     request: GenTxtRequest,
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """
     Generate Text endpoint (supports text and image input).
@@ -162,6 +165,7 @@ async def generate_text(
 @router.post("/genimg", response_model=GenImgResponse)
 async def generate_image(
     request: GenImgRequest,
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """
     Text-to-Image / Image-to-Image endpoint.
@@ -198,7 +202,10 @@ async def generate_image(
 
 
 @router.post("/genvideo", response_model=GenVideoResponse)
-async def generate_video(request: GenVideoRequest):
+async def generate_video(
+    request: GenVideoRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
     """
     Text-to-Video / Image-to-Video endpoint.
 
@@ -224,7 +231,10 @@ async def generate_video(request: GenVideoRequest):
 
 
 @router.post("/genaudio", response_model=GenAudioResponse)
-async def generate_audio(request: GenAudioRequest):
+async def generate_audio(
+    request: GenAudioRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
     """
     Text-to-Speech (TTS) endpoint.
 
@@ -249,7 +259,10 @@ async def generate_audio(request: GenAudioRequest):
 
 
 @router.post("/transcribe", response_model=TranscribeAudioResponse)
-async def transcribe_audio(request: TranscribeAudioRequest):
+async def transcribe_audio(
+    request: TranscribeAudioRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
     """
     Speech-to-Text (STT) endpoint.
 
@@ -275,7 +288,10 @@ async def transcribe_audio(request: TranscribeAudioRequest):
 
 
 @router.post("/analyzepdf", response_model=AnalyzePdfResponse)
-async def analyze_pdf(request: AnalyzePdfRequest):
+async def analyze_pdf(
+    request: AnalyzePdfRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
     """
     Analyze a single PDF using native PDF input.
 

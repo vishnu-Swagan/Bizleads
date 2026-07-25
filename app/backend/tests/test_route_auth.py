@@ -32,3 +32,19 @@ async def test_all_routes_are_deleted(anon_client, path):
     assert response.status_code in (401, 422), (
         f"{path} returned unexpected status {response.status_code}"
     )
+
+
+AIHUB_ROUTES = [
+    "/api/v1/aihub/gentxt",
+    "/api/v1/aihub/genimg",
+    "/api/v1/aihub/genvideo",
+    "/api/v1/aihub/genaudio",
+    "/api/v1/aihub/transcribe",
+    "/api/v1/aihub/analyzepdf",
+]
+
+
+@pytest.mark.parametrize("path", AIHUB_ROUTES)
+async def test_aihub_requires_authentication(anon_client, path):
+    response = await anon_client.post(path, json={})
+    assert response.status_code == 401, f"{path} is callable anonymously"
