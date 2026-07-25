@@ -23,6 +23,27 @@ import { test as base, expect, type Page } from '@playwright/test';
  * `e2e/security/auth-gate.spec.ts` deliberately stubs nothing.
  */
 
+/** Must match VITE_SUPABASE_URL's project ref — supabase-js keys storage by it. */
+export const SUPABASE_PROJECT_REF = 'qpgoffrgqongaxubsgau';
+
+/**
+ * A Supabase user as /auth/v1/user returns it.
+ *
+ * `app_metadata.app_role` is what grants the application role. `user_metadata`
+ * is deliberately left without one: it is user-writable through the client
+ * SDK, so anything read from it must never confer privilege.
+ */
+export const SUPABASE_USER = {
+  id: 'e2e-user',
+  aud: 'authenticated',
+  role: 'authenticated',
+  email: 'e2e@example.test',
+  email_confirmed_at: '2026-01-01T00:00:00Z',
+  app_metadata: { provider: 'email', providers: ['email'] },
+  user_metadata: { full_name: 'E2E User' },
+  created_at: '2026-01-01T00:00:00Z',
+};
+
 export const TEST_USER = {
   id: 'e2e-user',
   email: 'e2e@example.test',
@@ -53,13 +74,50 @@ type Fixtures = {
 
 export const test = base.extend<Fixtures>({
   signedInPage: async ({ page }, use) => {
-    // The web SDK wraps HTTP bodies as { data }, so fulfil with the bare
-    // UserResponse the backend itself returns.
-    await page.route('**/api/v1/auth/me', (route) =>
+    // Auth is Supabase now, not the Atoms SDK. Two things are needed to look
+    // signed in, and both are required — a stubbed user endpoint with no stored
+    // session yields no access token to send, and a stored session with no
+    // stubbed endpoint fails verification against the real project.
+    //
+    // 1. A persisted session, under the key supabase-js actually reads.
+    await page.addInitScript(
+      ({ ref, user }) => {
+        const session = {
+          access_token: 'e2e-fake-access-token',
+          refresh_token: 'e2e-fake-refresh-token',
+          token_type: 'bearer',
+          expires_in: 3600,
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          user,
+        };
+        window.localStorage.setItem(`sb-${ref}-auth-token`, JSON.stringify(session));
+      },
+      { ref: SUPABASE_PROJECT_REF, user: SUPABASE_USER },
+    );
+
+    // 2. supabase-js validates the session against /auth/v1/user.
+    await page.route('**/auth/v1/user**', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(TEST_USER),
+        body: JSON.stringify(SUPABASE_USER),
+      }),
+    );
+
+    // Token refresh, in case the client decides the session needs renewing
+    // mid-test. Without this a refresh attempt hits the real project and the
+    // test becomes network-dependent and flaky.
+    await page.route('**/auth/v1/token**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          access_token: 'e2e-fake-access-token',
+          refresh_token: 'e2e-fake-refresh-token',
+          token_type: 'bearer',
+          expires_in: 3600,
+          user: SUPABASE_USER,
+        }),
       }),
     );
 
