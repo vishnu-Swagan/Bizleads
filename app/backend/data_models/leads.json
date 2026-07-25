@@ -1,0 +1,92 @@
+{
+    "title": "leads",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "user_id": {
+            "type": "string",
+            "description": "Owner user ID"
+        },
+        "business_name": {
+            "type": "string",
+            "description": "Name of the business"
+        },
+        "category": {
+            "type": "string",
+            "description": "Business category/industry"
+        },
+        "location": {
+            "type": "string",
+            "description": "Business location (city, country)"
+        },
+        "country": {
+            "type": "string",
+            "description": "Country of the business"
+        },
+        "website_url": {
+            "type": "string",
+            "description": "Business website URL if exists",
+            "default": ""
+        },
+        "website_score": {
+            "type": "integer",
+            "description": "Website quality score 0-100",
+            "default": 0
+        },
+        "social_score": {
+            "type": "integer",
+            "description": "Social media presence score 0-100",
+            "default": 0
+        },
+        "has_website": {
+            "type": "boolean",
+            "description": "Whether business has a website",
+            "default": false
+        },
+        "social_platforms": {
+            "type": "string",
+            "description": "JSON string of social media platforms found",
+            "default": "[]"
+        },
+        "contact_email": {
+            "type": "string",
+            "description": "Contact email if available",
+            "default": ""
+        },
+        "contact_phone": {
+            "type": "string",
+            "description": "Contact phone if available",
+            "default": ""
+        },
+        "pipeline_stage": {
+            "type": "string",
+            "description": "CRM pipeline stage: new_lead, contacted, in_progress, won, lost",
+            "default": "new_lead"
+        },
+        "priority": {
+            "type": "string",
+            "description": "Lead priority: low, medium, high",
+            "default": "medium"
+        },
+        "notes_count": {
+            "type": "integer",
+            "description": "Number of notes attached",
+            "default": 0
+        },
+        "last_contacted": {
+            "type": "string",
+            "description": "Last contact date ISO string",
+            "default": ""
+        }
+    },
+    "required": [
+        "user_id",
+        "business_name",
+        "category",
+        "location",
+        "country"
+    ]
+}

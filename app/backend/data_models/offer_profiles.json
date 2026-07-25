@@ -1,0 +1,63 @@
+{
+    "title": "offer_profiles",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "workspace_id": {
+            "type": "integer"
+        },
+        "services": {
+            "type": "string",
+            "default": "[]"
+        },
+        "platforms": {
+            "type": "string",
+            "default": "[]"
+        },
+        "price_range_min": {
+            "type": "integer",
+            "default": 0
+        },
+        "price_range_max": {
+            "type": "integer",
+            "default": 0
+        },
+        "target_categories": {
+            "type": "string",
+            "default": "[]"
+        },
+        "target_geographies": {
+            "type": "string",
+            "default": "[]"
+        },
+        "languages": {
+            "type": "string",
+            "default": "[]"
+        },
+        "min_client_size": {
+            "type": "string",
+            "default": ""
+        },
+        "max_client_size": {
+            "type": "string",
+            "default": ""
+        },
+        "monthly_capacity": {
+            "type": "integer",
+            "default": 5
+        },
+        "preferred_channels": {
+            "type": "string",
+            "default": "[]"
+        },
+        "portfolio_tags": {
+            "type": "string",
+            "default": "[]"
+        }
+    },
+    "required": [
+        "workspace_id"
+    ]
+}

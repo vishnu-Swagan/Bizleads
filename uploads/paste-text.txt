@@ -1,0 +1,721 @@
+You are the senior product strategist, UX lead, staff full-stack engineer, data engineer, security engineer, growth engineer, and QA owner for this project. Upgrade my existing Atoms prototype into a production-ready public subscription SaaS. Work inside the current project; do not start a disconnected mockup.
+
+The existing app currently has these routes and screens:
+
+•	/dashboard
+•	/search
+•	/leads
+•	/pipeline
+•	/analytics
+•	/automation
+
+The current UI is a clean light dashboard with top navigation, cards, filters, a leads table, a Kanban pipeline, simple analytics, and an “AI Automation Center.” Preserve useful working components and the overall clarity, but replace prototype logic, static records, vague scores, fake metrics, empty actions, and demo-only behavior with a real multi-tenant product.
+
+Use BizLeads consistently as the working product name. Do not mix “LeadFinder” and “BizLeads.” The working category is:
+
+Website Opportunity Intelligence and Proof-to-Pitch OS for web designers and small agencies
+
+The positioning is:
+
+Find the businesses most likely to buy a better website—and prove why now.
+
+The product must not be another generic Google Maps scraper or a list of businesses with bad websites. Existing tools already offer local search, weak/no-website filters, generic scores, Lighthouse audits, AI emails, Kanban pipelines, PDFs, and instant demo websites. Our differentiator must be the complete evidence-to-revenue loop described below.
+
+1. Target users and business model
+
+Primary paying users:
+
+•	Freelance web designers and developers
+•	Webflow, WordPress, Shopify, Framer, Wix, and no-code builders
+•	Small web design, SEO, CRO, and local-marketing agencies
+•	Small outbound teams selling websites or digital-presence services to local businesses
+
+Business owners whose profiles are discovered may use a limited free owner portal to claim or remove their business, correct facts, opt into proposals, and create a verified project brief. This owner portal supplies intent to the marketplace; it does not expose the paid agency application.
+
+The agency application is private. A visitor must create an account, verify their email, complete onboarding, and start a trial or paid subscription before accessing live lead data. Do not expose contacts, search results, audits, exports, or dashboards publicly.
+
+Use a subscription-plus-usage-credit model because searches, audits, enrichment, screenshots, AI generation, verification, and monitoring have real variable costs. Make all plan names, prices, quotas, entitlements, trial length, annual discounts, top-ups, and provider-cost multipliers editable by an administrator rather than hardcoded.
+
+Suggested launch hypotheses:
+
+•	Trial: signup required, 7 days or 25 credits, no card required, limited saves, no bulk export, watermarked Proof Rooms
+•	Solo: approximately $29/month, 1 seat, 300 monthly credits
+•	Pro: approximately $79/month, 3 seats, 1,500 monthly credits, saved-search monitoring, exports, integrations, and white-label Proof Rooms
+•	Agency: approximately $199/month, 10 seats, 5,000 monthly credits, lead reservations, advanced analytics, priority jobs, and API/CRM access
+•	Annual option: approximately two months free
+•	Optional one-time credit packs
+
+These prices are testable hypotheses, not permanent decisions. Stripe Price IDs and plan entitlements must be configured through environment variables and the admin console.
+
+2. Product thesis: rank the likelihood to buy, not merely website weakness
+
+A poor or missing website is not automatically a good lead. BizLeads must separate the following concepts and never hide them inside one unexplained score:
+
+1.	Need Score, 0–100 How deficient the current website and digital presence are.
+2.	Buyability Score, 0–100 Evidence that the business is active, commercially viable, growing, investing, and plausibly able to buy.
+3.	Timing Score, 0–100 Evidence that this is a good moment to approach: a new location, review acceleration, recent business launch, site outage, expired certificate, platform end-of-life, active advertising with a weak landing experience, a recent rebrand, hiring, or another permitted change signal.
+4.	Reachability and Eligibility Score, 0–100 Availability and confidence of lawful contact routes, decision-maker relevance where licensed data exists, suppression status, jurisdiction, and outreach saturation.
+5.	Agency Fit Score, 0–100 Match to the subscriber’s services, technical stack, portfolio, price range, geography, preferred verticals, delivery capacity, and case studies.
+6.	Evidence Confidence, 0–100 Source agreement, freshness, completeness, and whether the claim is measured, owner-confirmed, provider-supplied, or inferred by AI.
+
+Calculate an explainable default priority score:
+
+base = 0.30 × Need + 0.25 × Buyability + 0.20 × Timing + 0.15 × Reachability + 0.10 × AgencyFit
+
+confidenceMultiplier = 0.65 + 0.35 × (EvidenceConfidence / 100)
+
+PriorityScore = clamp(round(base × confidenceMultiplier − RiskPenalty), 0, 100)
+
+RiskPenalty is 0–20 and covers contradictory identity data, closed or duplicate listings, franchise/corporate control, legal or suppression restrictions, unreachable contacts, recently rebuilt high-quality sites, and other “do not pitch” reasons.
+
+All weights must be versioned, testable, and configurable at platform level. Pro and Agency workspaces may adjust bounded weights. Every score must have:
+
+•	A visible breakdown
+•	The facts that affected it
+•	Source and last-verified timestamp
+•	Confidence
+•	Score-version identifier
+•	Missing-data explanation
+•	A “Why this score?” drawer
+
+Apply a Service Lens rather than assuming every subscriber sells the same thing. The same business may be a high-fit lead for a booking-system specialist, a medium-fit lead for a Shopify studio, and a low-fit lead for an accessibility consultancy. Recalculate Fit, recommended scope, and expected value for the selected service without changing the underlying evidence.
+
+Never encode unknown, not checked, not applicable, or provider unavailable as zero. In particular, distinguish:
+
+•	No website
+•	Invalid or parked website
+•	Website temporarily unavailable
+•	Weak website
+•	Healthy website
+•	Website status unknown
+
+Do the same for social presence. Only score recency, engagement, or profile completeness when those facts come from approved APIs, licensed providers, the business’s own website, or owner-confirmed data. Do not scrape protected social networks or invent follower/activity numbers.
+
+3. Expected Agency Value
+
+After a workspace has enough outcome data, rank leads using the subscriber’s economics:
+
+Expected Agency Value = P(reply) × P(meeting | reply) × P(close | meeting) × expected gross profit − expected acquisition cost
+
+During cold start, use transparent rules-based priors and wide confidence ranges. Do not pretend that probability estimates are accurate before enough outcomes exist. Show “insufficient workspace data” when appropriate.
+
+The user’s onboarding and settings must capture:
+
+•	Services and platforms offered
+•	Typical package names and price ranges
+•	Estimated delivery cost or gross margin
+•	Target categories and geographies
+•	Minimum and maximum client size
+•	Languages
+•	Portfolio/case-study tags
+•	Current monthly capacity
+•	Preferred outreach channels
+
+Use this information to recommend the most relevant service package, price band, proof assets, and next action for each lead. All commercial estimates must be ranges with editable assumptions, never guaranteed revenue claims.
+
+4. Revenue Gap Twin: evidence before outreach
+
+Create a Revenue Gap Twin for every qualified business. It is a timestamped, auditable model of the business’s current digital customer journey, not an AI-written insult.
+
+It must include, where data is available and permitted:
+
+•	Canonical entity identity and duplicate resolution
+•	Current website status and full-page screenshots
+•	Mobile and desktop performance
+•	Core Web Vitals or their current official equivalents
+•	Accessibility signals
+•	Technical SEO and indexability
+•	Broken links, forms, calls, booking, checkout, and conversion-path issues
+•	HTTPS, certificate, DNS, redirect, uptime, and domain signals
+•	CMS, ecommerce platform, analytics, pixels, schema, and other licensed technographics
+•	Design-age or usability observations marked clearly as AI inference
+•	Local business profile completeness and reputation signals
+•	Rating, review count, and review velocity where licensed
+•	Social profile links and permitted activity indicators
+•	Competitor benchmark against 3–5 comparable nearby businesses
+•	Missing trust, booking, lead-capture, ecommerce, multilingual, or accessibility capabilities
+•	The exact customer journey that is leaking: discover → trust → contact/book/buy
+•	Top three evidence-backed problems
+•	Top three recommended interventions
+•	Suggested service package and scope
+•	“Why now” timing reason
+•	“Do not pitch” reasons, when present
+•	Source link, evidence timestamp, and confidence for every claim
+
+Add an evidence ledger that preserves raw audit outputs and screenshots according to provider licenses and retention rules. AI summaries must cite ledger items. A user must be able to disagree with or dismiss an inference.
+
+5. Proof Room: convert evidence into a sale
+
+For a qualified lead, generate a white-label Proof Room that the agency can edit and share with the business owner. It is more useful than a generic PDF.
+
+Each Proof Room should support:
+
+•	Agency logo, colors, domain, profile, and sender identity
+•	Prospect name, category, location, and permitted public facts
+•	Current-vs-proposed customer journey
+•	Annotated evidence from the Revenue Gap Twin
+•	A modern, editable one-page concept or key-section redesign
+•	Vertical-specific copy and calls to action
+•	A transparent ROI/impact calculator with user-editable assumptions
+•	Recommended package, scope, price range, timeline, and optional upgrades
+•	Agency case study matched by vertical/problem/platform
+•	Calendar booking CTA
+•	Proposal-request CTA
+•	Optional deposit or paid-discovery CTA
+•	Password, expiration, revocation, and custom slug
+•	Signed or unguessable access, noindex, and no accidental search-engine exposure
+•	View analytics, repeat visits, CTA clicks, and last viewed
+•	Consent-safe tracking controls and a no-tracking option
+•	Mobile-perfect presentation
+
+Do not copy a prospect’s existing site or unlicensed creative assets. Use permitted business facts, owner-provided assets, properly licensed images, and original generated layouts. Clearly label concepts as proposals, not as the business’s live website.
+
+6. Website Opportunity Exchange
+
+Add a two-sided, privacy-respecting intent layer that competitors cannot reproduce with only a scraper.
+
+Every business must have a safe claim and opt-out path. A business owner can:
+
+•	Find or receive a limited public audit preview
+•	Claim the profile at no cost
+•	Verify ownership through a suitable method such as domain email, business email, phone OTP, provider verification, or manual review
+•	Correct business facts and dispute evidence
+•	Request deletion or suppression where required
+•	Mark “not interested” or “do not contact”
+•	Confirm their goals, budget band, decision timeline, preferred platform, required features, and current blockers
+•	Upload a logo, brand assets, or brief
+•	Mark the opportunity as “open to proposals”
+•	Receive no more than a configurable small number of proposals, default 3
+•	Compare proposals and book calls
+•	Close the request when a provider is selected
+
+Paying agencies can see owner-verified briefs only when their plan and offer profile qualify. Never reveal private business-owner data without permission. Do not reveal one agency’s identity, activity, notes, or pipeline state to another.
+
+Add a privacy-preserving Prospect Respect Layer:
+
+•	Workspace suppression lists
+•	Platform-wide complaint and opt-out suppression
+•	Contact cooldowns
+•	An anonymized saturation signal based on canonical business/contact hashes
+•	Optional time-limited lead reservation for eligible plans
+•	No disclosure of which other workspace contacted the prospect
+•	A hard send block for suppressed contacts
+•	A visible eligibility reason before any outreach draft can be sent
+
+This should reduce duplicate spam and make the lead inventory more valuable.
+
+7. Closed-loop learning moat
+
+Capture structured outcomes:
+
+•	Contact attempted
+•	Delivered, bounced, opened, clicked where lawful
+•	Replied
+•	Positive reply
+•	Meeting booked
+•	Proposal sent
+•	Won
+•	Lost
+•	Lost reason
+•	Contract value
+•	Gross profit estimate
+•	Time to close
+•	Service sold
+•	Post-launch client-approved uplift metrics where available
+
+Use a workspace’s own outcomes to calibrate ranking by vertical, geography, issue type, service, channel, price range, and timing signal. Keep early versions rules-based and explainable. Any cross-workspace learning must be aggregated, privacy-preserving, require sufficient sample sizes, and never expose another customer’s records.
+
+Build a “Score calibration” analytics view that shows whether high-scored leads actually reply, meet, and close better than lower-scored leads. A score without outcome validation is not acceptable.
+
+8. Discovery and search workflow
+
+Replace the current empty search screen with a real, job-based discovery workflow.
+
+Search inputs:
+
+•	Natural-language query
+•	Country, state/region, city, postcode, radius, map bounds, or polygon
+•	Business category and exclusions
+•	Independent vs chain/franchise
+•	Open/operational status
+•	Website state
+•	Need, Buyability, Timing, Reachability, Fit, Confidence, and Priority ranges
+•	Rating and review-count ranges
+•	Review velocity when licensed
+•	Contact availability and verification status
+•	Site performance, mobile, SEO, accessibility, security, conversion, CMS, ecommerce, booking, analytics, pixel, and schema signals
+•	Social presence status, including unknown
+•	Active advertising or other licensed investment signals
+•	New business, new location, or recent-change signals
+•	Language
+•	Estimated project-value range
+•	“Owner verified/open to proposals”
+•	Exclude existing leads, suppressed businesses, duplicates, previously lost records, or reserved prospects
+
+Before running a search, show:
+
+•	Estimated result count when available
+•	Expected credit cost
+•	Which providers/checks will run
+•	Estimated processing time
+•	Data-freshness note
+
+Run search, crawling, audits, screenshot capture, enrichment, and AI work as asynchronous jobs. The UI must show queued/running/partial/complete/failed/cancelled states, progress, partial results, retries, provider errors, credits reserved, credits finalized, and credits returned after a failed job. Do not freeze the browser during a search.
+
+Use two-pass research to control cost. Pass 1 performs low-cost entity resolution and basic qualification across many businesses. Pass 2 runs deeper audits, screenshots, contact verification, competitor benchmarks, and AI analysis only for shortlisted or high-potential records. Show separate credit estimates and let the user choose automatic or manual deep qualification.
+
+Results must have list and map views, bulk selection, saved views, column customization, sorting, pagination or virtualization, deduplication, and CSV export when entitled. Each row should show:
+
+•	Business and location
+•	Website state
+•	Separate sub-scores
+•	Priority and confidence
+•	Top opportunity reason
+•	Top risk or “do not pitch” reason
+•	Owner-verified status
+•	Contact confidence
+•	Expected value range
+•	Last verified
+•	Save/qualify/dismiss actions
+
+Saved searches can be monitored daily or weekly according to plan. Notify only when a meaningful new lead or change signal appears.
+
+9. Lead record, pipeline, activity, and tasks
+
+Create a full lead-detail page or drawer with these tabs:
+
+•	Overview
+•	Revenue Gap Twin
+•	Evidence
+•	Contacts
+•	Proof Room
+•	Outreach
+•	Activity
+•	Files and notes
+
+Add customizable pipeline stages, drag and drop, stage history, owner assignment, expected value, probability, next action, due date, tags, notes, files, tasks, reminders, duplicate merge, and archived/lost reasons.
+
+Pipeline cards should show expected value, owner, next task, age in stage, latest intent signal, and an overdue state. Add saved filters by owner, stage, score, region, category, value, and activity.
+
+10. Outreach and automations
+
+Rename the vague “AI Auto” area to Automations. It must be a real control center, not decorative tabs.
+
+MVP behavior:
+
+•	Generate personalized email, call, voicemail, contact-form, and direct-message drafts using evidence
+•	Cite the evidence used
+•	Never invent a compliment, owner name, issue, or result
+•	Human review is required by default
+•	No message sends unless a verified sender connection exists and the lead is eligible
+•	Show deliverability and compliance checks before sending
+•	Apply workspace and platform suppression
+•	Include sender identity, postal address where required, and a working unsubscribe mechanism
+•	Record message and provider events
+•	Support pause, resume, cancel, schedule, quiet hours, per-domain caps, daily caps, and emergency stop
+•	Provide an activity log with exact success/failure reason
+
+Do not build a “spam cannon.” Do not auto-send into jurisdictions where the configured lawful basis or consent is insufficient. Let users configure region policies, but default to the safest draft-only behavior. Store the claimed lawful basis or consent source, the user who approved the send, the message version, and the suppression check result.
+
+Later integrations may include Gmail/Google Workspace, Outlook/Microsoft 365, a transactional mail provider for app emails, and approved CRM/export destinations. Use OAuth and server-side tokens; never ask users to paste mailbox passwords.
+
+11. Fix and expand every current screen
+
+Dashboard
+
+•	Replace vanity cards with actionable widgets: top opportunities, new timing signals, owner-verified briefs, overdue tasks, pipeline value, meetings, wins, subscription usage, and provider status
+•	Show both lead-to-win rate and closed-deal win rate with explicit numerator, denominator, and date range
+•	The prototype’s “100% conversion rate” is misleading when based on one won and zero lost; render it as “Closed-deal win rate: 100% (1 of 1 closed)” and separately “Lead-to-win: 12.5% (1 of 8)” for that sample
+•	Never display demo values in a real workspace
+
+Search / Discover
+
+•	Implement the job-based workflow, results, map, filters, costs, states, and saved searches described above
+•	Replace the huge empty state with helpful examples and recent searches
+
+All Leads
+
+•	Add confidence, last verified, top reason, expected value, owner, next action, and source status
+•	Distinguish zero from unknown
+•	Open a real lead detail view
+•	Entitle exports by plan and log them
+
+Pipeline
+
+•	Persist drag-and-drop changes
+•	Add owner, value, task, age, and activity
+•	Allow workspace-defined stages and lost reasons
+
+Analytics
+
+•	Add date range and comparison period
+•	Show discovery → qualified → contacted → replied → meeting → proposal → won funnel
+•	Show reply rate, positive-reply rate, booked rate, win rate, lead-to-win, revenue, gross profit estimate, sales cycle, source performance, vertical performance, score calibration, credit usage, provider cost, and estimated ROI
+•	Every rate needs a visible definition and denominator
+•	Handle small samples honestly
+
+Automations
+
+•	Implement queues, approvals, schedules, logs, limits, sender health, error states, and an emergency stop
+
+Add missing product areas:
+
+•	Lead detail
+•	Revenue Gap Twins
+•	Proof Rooms
+•	Owner claims/project briefs
+•	Campaign drafts
+•	Notifications
+•	Team/workspace settings
+•	Offer profile
+•	Integrations
+•	Billing and usage
+•	Help/support
+•	Admin console
+
+12. Public website, authentication, onboarding, and account management
+
+Create polished public routes:
+
+•	/
+•	/product
+•	/how-it-works
+•	/use-cases/web-designers
+•	/use-cases/agencies
+•	/pricing
+•	/faq
+•	/contact
+•	/login
+•	/signup
+•	/forgot-password
+•	/verify-email
+•	/legal/terms
+•	/legal/privacy
+•	/legal/acceptable-use
+•	/legal/cookies when needed
+•	/claim/[token-or-slug]
+
+The landing page should explain the difference between a weak-site list and a buyable opportunity. Show a clearly labelled fictional interactive example. Do not invent customer logos, testimonials, usage counts, accuracy statistics, or revenue claims.
+
+Authentication must support:
+
+•	Email/password
+•	Email verification
+•	Password reset
+•	Secure session handling
+•	Optional Google sign-in
+•	CAPTCHA/rate limiting for abuse-prone forms
+•	Account export and deletion
+
+Onboarding should capture the offer profile described above and then run a guided first search. Include a checklist that finishes only when real actions are completed.
+
+Support multi-tenant workspaces with roles:
+
+•	Owner
+•	Admin
+•	Member
+•	Viewer
+
+Implement invitations, seat limits, removal, ownership transfer, and an audit log.
+
+13. Billing and entitlements
+
+Use Stripe Checkout, Stripe Billing, Customer Portal, webhooks, and feature entitlements.
+
+Required behavior:
+
+•	Monthly and annual subscriptions
+•	Trial lifecycle
+•	Plan upgrades and downgrades
+•	Proration preview
+•	Cancellation at period end
+•	Reactivation
+•	Failed-payment grace period
+•	Read-only or limited state after entitlement loss
+•	Invoices and billing history
+•	Top-up credit purchases
+•	Coupons or founder codes controlled by admin
+•	Tax-ready billing fields
+•	Idempotent webhook handling
+•	Replay-safe credit ledger
+•	Server-side entitlement checks on every paid action
+•	UI upgrade prompts that explain the exact limit
+
+Never rely only on hiding a button. Search, save, audit, generate, export, reserve, API, seat, and Proof Room limits must be enforced on the server.
+
+14. Data providers, provenance, and compliance architecture
+
+Create a provider-adapter layer so the app is not locked to one vendor.
+
+Provider categories:
+
+•	Licensed local-business discovery
+•	Website performance/audit
+•	Screenshot/rendering
+•	DNS/domain/security
+•	Technographics
+•	Contact enrichment and verification
+•	Approved social/business presence
+•	Email delivery
+•	AI text and visual analysis
+
+Possible providers may include Google Places for compliant live discovery, PageSpeed Insights/Lighthouse for audits, and a properly licensed BuiltWith or Wappalyzer plan for technographics. Do not assume that a normal end-user plan permits data resale or embedding; require confirmation of commercial/API rights before enabling a provider in production.
+
+For every field store:
+
+•	Provider and external record ID
+•	Retrieved timestamp
+•	Expiration/refresh timestamp
+•	Confidence
+•	License/retention class
+•	Whether it is measured, provider-supplied, owner-confirmed, user-entered, or AI-inferred
+
+Follow each provider’s caching, display, attribution, and deletion terms. If using Google Places, design around current policy: retain identifiers such as permitted Place IDs, refresh restricted content, show required attribution, and do not turn cached Places content into a permanent resale database.
+
+When API credentials are absent:
+
+•	Show an Integration Setup state
+•	Allow a separate fictional demo workspace labelled “Demo”
+•	Never silently return fabricated businesses as live results
+•	Disable the affected paid action with a precise setup message
+
+15. Data model
+
+Use the existing Atoms backend if suitable. Otherwise use a production-grade relational database with migrations. Every tenant-owned row must include workspace_id and be protected by row-level authorization.
+
+At minimum model:
+
+•	users/profiles
+•	workspaces
+•	memberships and invitations
+•	offer profiles and service packages
+•	plans, subscriptions, entitlements, and seats
+•	usage and immutable credit ledger
+•	provider connections and provider health
+•	searches, search runs, filters, and monitoring schedules
+•	asynchronous jobs and job events
+•	canonical businesses and source records
+•	owner claims, verifications, disputes, and project briefs
+•	websites and website observations
+•	audits, screenshots, evidence items, and competitor benchmarks
+•	signals and signal history
+•	score versions, score inputs, and score breakdowns
+•	contact points, validation status, lawful-basis metadata, and source
+•	leads, assignments, stages, stage history, and tags
+•	activities, tasks, notes, and files
+•	Proof Rooms, revisions, share settings, and view events
+•	proposals, meetings, and deposits
+•	outreach drafts, approvals, campaigns, messages, and provider events
+•	suppression, complaints, reservations, and saturation hashes
+•	outcomes, contract values, and calibration snapshots
+•	notifications
+•	support tickets
+•	webhook events
+•	admin audit log and feature flags
+
+Add uniqueness and idempotency constraints for provider records, canonical entities, credit mutations, and webhooks. Do not allow one workspace to read another workspace’s leads, notes, contacts, Proof Rooms, outcomes, or billing records.
+
+16. Security, privacy, and responsible crawling
+
+Implement:
+
+•	Server-only secret storage
+•	Row-level tenant isolation
+•	Least-privilege service roles
+•	Encryption in transit and at rest where supported
+•	Secure cookies and session rotation
+•	CSRF, XSS, injection, open-redirect, and clickjacking protection
+•	Content Security Policy and secure headers
+•	Rate limits by user, workspace, IP, plan, and provider
+•	Audit logs for sensitive actions
+•	Webhook signature verification
+•	File type/size validation and malware-safe handling
+•	Backup and restore procedure
+•	Dependency and error monitoring
+
+Website scanning must be protected against SSRF and hostile content:
+
+•	Allow only valid http/https destinations
+•	Resolve and block loopback, private, link-local, metadata, and internal address ranges
+•	Protect against DNS rebinding and redirect-to-private-IP attacks
+•	Use timeouts, response-size limits, content-type checks, sandboxed rendering, and safe user agents
+•	Sanitize fetched HTML and never execute untrusted content in the application origin
+•	Never submit a prospect’s contact, booking, login, checkout, or other form while auditing
+•	Respect applicable robots, website terms, rate limits, and provider rules
+
+Implement public Terms, Privacy, Acceptable Use, data-source disclosure, contact/suppression request, and account/data deletion flows. Add consent-aware analytics and cookie controls when required.
+
+For outreach, build adaptable guardrails for applicable laws and policies, including sender identity, opt-out, suppression, consent or lawful-basis records, and regional restrictions. Do not present the app as legal advice and do not imply that a public email address is automatically legal to contact everywhere.
+
+17. Admin and unit economics
+
+Build a protected admin console with:
+
+•	Users, workspaces, roles, trials, and account status
+•	Plans, prices, entitlements, quotas, and feature flags
+•	Subscriptions, invoices, coupons, refunds, and top-ups
+•	Credit ledger adjustments with required reason and audit trail
+•	Search/audit/enrichment jobs and retries
+•	Provider credentials status, health, rate limits, latency, error rate, and cost
+•	Cost per search, qualified lead, audit, Proof Room, and paying workspace
+•	Gross-margin alerts and circuit breakers
+•	Claims, verification review, disputes, deletion, suppression, and complaints
+•	Outreach abuse and bounce/complaint monitoring
+•	Support tickets and account impersonation with visible audit notice
+•	Content/FAQ/legal document management
+•	Product analytics without exposing tenant-sensitive data
+•	System audit log
+
+Add cost protections: per-plan concurrency, usage limits, budget caps, job deduplication, caching only where permitted, retry backoff, and admin kill switches.
+
+18. UX and visual direction
+
+The current prototype is clean but generic and too sparse. Keep a premium, restrained B2B style:
+
+•	Light neutral background, white surfaces, deep navy/charcoal text, royal blue/indigo primary, amber for timing, green for verified/success, red only for risk/error
+•	One consistent icon family
+•	Strong typography and compact information hierarchy
+•	Clear tables on desktop and usable cards/drawers on mobile
+•	Responsive application navigation, preferably a collapsible left sidebar for the expanded product
+•	Sticky filter/action bars where useful
+•	Evidence and score explanations within one click
+•	Skeleton, empty, partial, permission, provider-down, quota, and error states
+•	Tooltips only for supplementary information, never essential instructions
+•	Keyboard support and visible focus states
+•	WCAG 2.2 AA target
+
+Avoid excessive gradients, decorative AI sparkles, enormous empty sections, fake charts, and a rainbow of status colors. Prioritize evidence, confidence, next action, and value.
+
+19. Product routes
+
+Keep redirects from the existing routes, but organize authenticated pages under /app:
+
+•	/app/dashboard
+•	/app/discover
+•	/app/searches/[id]
+•	/app/leads
+•	/app/leads/[id]
+•	/app/pipeline
+•	/app/twins
+•	/app/proof-rooms
+•	/app/briefs
+•	/app/campaigns
+•	/app/automations
+•	/app/analytics
+•	/app/notifications
+•	/app/settings/profile
+•	/app/settings/workspace
+•	/app/settings/offer
+•	/app/settings/team
+•	/app/settings/integrations
+•	/app/settings/billing
+•	/app/settings/usage
+•	/admin/*
+
+20. Implementation order
+
+First inspect the existing project, routes, components, database, and current integrations. Preserve working code and user data. Do not destructively replace the app.
+
+Then provide a concise implementation plan and immediately execute it in this order without waiting for confirmation unless credentials, a legal/business choice, or destructive migration truly requires my input:
+
+Phase A — Production foundation
+
+•	Consistent BizLeads brand
+•	Public marketing pages
+•	Auth, verification, reset, workspace, roles, onboarding
+•	Relational schema, tenant isolation, migrations
+•	Stripe subscription, entitlements, trial, portal, and credit ledger
+•	Settings and admin foundation
+
+Phase B — Real discovery and evidence
+
+•	Provider adapters and integration settings
+•	Async job queue and usage metering
+•	Real discovery, filters, list/map results, deduplication
+•	Website audits, screenshots, source provenance
+•	Separate scores, confidence, risks, and lead detail
+•	Explicit demo mode only when credentials are absent
+
+Phase C — Proof-to-pitch
+
+•	Revenue Gap Twin
+•	Proof Room builder and share experience
+•	Offer/package matching
+•	Tasks, pipeline, outcomes, and actionable dashboard
+
+Phase D — Exchange and intent
+
+•	Owner claim, verification, corrections, opt-out
+•	Owner project brief and “open to proposals”
+•	Proposal caps, qualification, reservations, and Respect Layer
+
+Phase E — Controlled outreach and learning
+
+•	Evidence-based drafts and human approvals
+•	Sender integrations, suppression, schedules, events, and emergency stop
+•	Funnel analytics, Expected Agency Value, and score calibration
+
+Phase F — Hardening and launch
+
+•	Security tests
+•	Tenant-isolation tests
+•	Billing/webhook tests
+•	Accessibility and responsive QA
+•	Provider failure and cost-control tests
+•	Legal pages and data-request flows
+•	Observability, backups, and production deployment checklist
+
+If the full scope cannot be safely completed in one generation, build the phases as real vertical slices in order. Do not replace missing functionality with decorative buttons. Do not claim a phase is complete until its critical flow is wired to persistent data and tested.
+
+21. Acceptance criteria
+
+The build is not complete until all of the following are true:
+
+1.	Anonymous users cannot access live lead or contact data.
+2.	A new user can sign up, verify email, create a workspace, complete offer onboarding, start a trial/subscription, and run an entitled action.
+3.	Stripe webhooks are signature-verified and replay-safe; duplicate events cannot duplicate credits or access.
+4.	Plan and credit limits are enforced server-side.
+5.	One workspace cannot read or modify another workspace’s records, even by changing an ID in a URL or API call.
+6.	A real search uses a connected provider; a missing provider shows setup—not fake live results.
+7.	Search jobs expose progress, partial results, failure reason, and correct credit reconciliation.
+8.	Duplicate businesses are resolved and contradictory records show reduced confidence.
+9.	No website, weak website, and unknown website are different states.
+10.	Every score exposes breakdown, source, freshness, confidence, and version.
+11.	A low-quality website with no commercial/reachability evidence is not automatically marked “hot.”
+12.	A user can create a lead, move it through the pipeline, assign it, add a task, and retain all changes after refresh.
+13.	A Revenue Gap Twin contains timestamped evidence and can separate measurement from AI inference.
+14.	A Proof Room can be edited, shared, revoked, expired, and viewed on mobile.
+15.	A business owner can claim, dispute, correct, opt out, and create an opt-in project brief.
+16.	Suppressed or ineligible contacts are blocked from sending.
+17.	Outreach remains draft-only until a sender is connected, the user approves, and checks pass.
+18.	Funnel rates show definitions, denominators, and date ranges; small samples are labelled.
+19.	The current sample’s one won deal is not misleadingly presented as overall “100% conversion.”
+20.	Exports respect plan limits, permissions, suppression, and provider licenses.
+21.	All important pages have loading, empty, partial, error, permission, and quota states.
+22.	The app is responsive, keyboard usable, and meets the WCAG 2.2 AA target for core flows.
+23.	API keys and secrets never appear in client code or logs.
+24.	URL scanning blocks private/internal networks and dangerous redirects.
+25.	Admins can see provider cost and disable an expensive or failing integration.
+26.	Production contains no unlabeled mock leads, fake customer claims, dead navigation, or placeholder actions.
+
+22. Required handoff
+
+At completion, give me:
+
+•	What was preserved, changed, and added
+•	Database migrations and policies created
+•	Working routes and workflows
+•	Environment variables and external accounts still required
+•	Stripe products/prices/webhooks that I must configure
+•	Provider licenses or approvals that must be confirmed
+•	Tests run and results
+•	Known limitations and intentionally deferred items
+•	Exact production launch checklist
+
+Do not expose secrets in the handoff. Do not tell me “everything is production ready” unless the acceptance criteria have actually been verified.
+
+Begin by auditing the existing project, then implement Phase A and continue through the phases in order.
+
+ 
+
+END MASTER PROMPT

@@ -1,0 +1,63 @@
+{
+    "title": "workspaces",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "name": {
+            "type": "string"
+        },
+        "slug": {
+            "type": "string"
+        },
+        "owner_id": {
+            "type": "string"
+        },
+        "plan": {
+            "type": "string",
+            "default": "trial"
+        },
+        "trial_ends_at": {
+            "type": "string",
+            "default": ""
+        },
+        "stripe_customer_id": {
+            "type": "string",
+            "default": ""
+        },
+        "stripe_subscription_id": {
+            "type": "string",
+            "default": ""
+        },
+        "subscription_status": {
+            "type": "string",
+            "default": "trialing"
+        },
+        "monthly_credits": {
+            "type": "integer",
+            "default": 25
+        },
+        "credits_used": {
+            "type": "integer",
+            "default": 0
+        },
+        "credits_reset_at": {
+            "type": "string",
+            "default": ""
+        },
+        "max_seats": {
+            "type": "integer",
+            "default": 1
+        },
+        "settings_json": {
+            "type": "string",
+            "default": "{}"
+        }
+    },
+    "required": [
+        "name",
+        "slug",
+        "owner_id"
+    ]
+}

@@ -1,0 +1,39 @@
+{
+    "title": "provider_connections",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "workspace_id": {
+            "type": "integer"
+        },
+        "provider_type": {
+            "type": "string"
+        },
+        "provider_name": {
+            "type": "string"
+        },
+        "status": {
+            "type": "string",
+            "default": "disconnected"
+        },
+        "config_json": {
+            "type": "string",
+            "default": "{}"
+        },
+        "last_health_check": {
+            "type": "string",
+            "default": ""
+        },
+        "error_count": {
+            "type": "integer",
+            "default": 0
+        }
+    },
+    "required": [
+        "workspace_id",
+        "provider_type",
+        "provider_name"
+    ]
+}

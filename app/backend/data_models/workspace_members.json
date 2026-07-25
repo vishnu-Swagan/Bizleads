@@ -1,0 +1,27 @@
+{
+    "title": "workspace_members",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "workspace_id": {
+            "type": "integer"
+        },
+        "role": {
+            "type": "string",
+            "default": "member"
+        },
+        "invited_email": {
+            "type": "string",
+            "default": ""
+        },
+        "status": {
+            "type": "string",
+            "default": "active"
+        }
+    },
+    "required": [
+        "workspace_id"
+    ]
+}

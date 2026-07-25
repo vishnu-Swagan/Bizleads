@@ -1,0 +1,48 @@
+{
+    "title": "ai_interaction_logs",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "user_id": {
+            "type": "string",
+            "description": "User who performed the action"
+        },
+        "action_type": {
+            "type": "string",
+            "description": "Type of AI action: generate_leads, follow_up_email, daily_report, send_email"
+        },
+        "input_summary": {
+            "type": "string",
+            "description": "Summary of input parameters"
+        },
+        "output_summary": {
+            "type": "string",
+            "description": "Summary of AI output"
+        },
+        "status": {
+            "type": "string",
+            "description": "Status: success, failed, pending"
+        },
+        "lead_id": {
+            "type": "integer",
+            "description": "Related lead ID if applicable"
+        },
+        "metadata_json": {
+            "type": "string",
+            "description": "JSON metadata for additional context"
+        },
+        "duration_ms": {
+            "type": "integer",
+            "description": "Duration of AI operation in milliseconds"
+        }
+    },
+    "required": [
+        "id",
+        "user_id",
+        "action_type",
+        "status"
+    ]
+}

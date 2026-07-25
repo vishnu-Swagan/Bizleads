@@ -1,0 +1,39 @@
+{
+    "title": "credit_ledger",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "workspace_id": {
+            "type": "integer"
+        },
+        "amount": {
+            "type": "integer"
+        },
+        "balance_after": {
+            "type": "integer"
+        },
+        "action": {
+            "type": "string"
+        },
+        "description": {
+            "type": "string",
+            "default": ""
+        },
+        "reference_id": {
+            "type": "string",
+            "default": ""
+        },
+        "idempotency_key": {
+            "type": "string",
+            "default": ""
+        }
+    },
+    "required": [
+        "workspace_id",
+        "amount",
+        "balance_after",
+        "action"
+    ]
+}

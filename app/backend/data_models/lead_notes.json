@@ -1,0 +1,32 @@
+{
+    "title": "lead_notes",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "Auto-increment primary key"
+        },
+        "user_id": {
+            "type": "string",
+            "description": "Owner user ID"
+        },
+        "lead_id": {
+            "type": "integer",
+            "description": "Associated lead ID"
+        },
+        "content": {
+            "type": "string",
+            "description": "Note content"
+        },
+        "note_type": {
+            "type": "string",
+            "description": "Type: note, call, email, meeting",
+            "default": "note"
+        }
+    },
+    "required": [
+        "user_id",
+        "lead_id",
+        "content"
+    ]
+}

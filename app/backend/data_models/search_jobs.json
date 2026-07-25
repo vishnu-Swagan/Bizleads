@@ -1,0 +1,51 @@
+{
+    "title": "search_jobs",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "workspace_id": {
+            "type": "integer"
+        },
+        "status": {
+            "type": "string",
+            "default": "queued"
+        },
+        "filters_json": {
+            "type": "string",
+            "default": "{}"
+        },
+        "credits_estimated": {
+            "type": "integer",
+            "default": 1
+        },
+        "credits_charged": {
+            "type": "integer",
+            "default": 0
+        },
+        "results_count": {
+            "type": "integer",
+            "default": 0
+        },
+        "progress_pct": {
+            "type": "integer",
+            "default": 0
+        },
+        "error_message": {
+            "type": "string",
+            "default": ""
+        },
+        "started_at": {
+            "type": "string",
+            "default": ""
+        },
+        "completed_at": {
+            "type": "string",
+            "default": ""
+        }
+    },
+    "required": [
+        "workspace_id"
+    ]
+}
