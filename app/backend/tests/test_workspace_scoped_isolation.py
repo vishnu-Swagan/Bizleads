@@ -188,10 +188,20 @@ async def test_workspace_members_list_excludes_other_tenants(user_a_client, user
 # Cross-tenant read/write 404s are already covered by
 # test_provider_connections_cross_tenant_read_is_404 and
 # test_provider_connections_cross_tenant_write_is_404 in
-# tests/test_write_allowlist.py - not duplicated here. This adds the missing
-# angle: config_json must not leak into a cross-tenant response either.
+# tests/test_write_allowlist.py - not duplicated here.
+#
+# config_json absence is NOT tested here as a tenant-scoping property: the
+# field is structurally absent from Provider_connectionsResponse (it's not
+# declared on the model at all, see routers/provider_connections.py), so it
+# never serializes into any response - same-tenant, cross-tenant, guard
+# present, or guard deleted. A text-absence assertion on it would be vacuous
+# with respect to the ownership check this file exists to verify. That
+# absence is already covered, correctly, as a same-tenant/structural property
+# by test_config_json_is_never_returned in tests/test_write_allowlist.py.
+# What *is* guard-dependent, and what this test actually checks, is the
+# ordinary cross-tenant read-and-list-exclusion behavior for this router.
 
-async def test_provider_connections_config_json_absent_from_cross_tenant_response(
+async def test_provider_connections_cross_tenant_read_and_list_exclusion(
     user_a_client, user_b_client, db_session
 ):
     workspace_a, _workspace_b = await _seed_two_workspaces(db_session)
@@ -205,14 +215,10 @@ async def test_provider_connections_config_json_absent_from_cross_tenant_respons
 
     theirs = await user_b_client.get(f"/api/v1/entities/provider_connections/{connection.id}")
     assert theirs.status_code == 404
-    assert "owner-a-secret-token" not in theirs.text
-    assert "config_json" not in theirs.text
 
     listed = await user_b_client.get("/api/v1/entities/provider_connections")
     assert listed.status_code == 200
     assert listed.json()["items"] == []
-    assert "owner-a-secret-token" not in listed.text
-    assert "config_json" not in listed.text
 
 
 # ---------- offer_profiles ----------
