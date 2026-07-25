@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
-from services.business_search import generate_search_results, BUSINESS_CATEGORIES, COUNTRIES_LIST
+from services.business_search import BUSINESS_CATEGORIES, COUNTRIES_LIST
 
 logger = logging.getLogger(__name__)
 
@@ -48,36 +48,6 @@ class FiltersResponse(BaseModel):
     categories: List[str]
     countries: List[str]
     web_presence_options: List[Dict[str, str]]
-
-
-@router.post("/businesses", response_model=SearchResponse)
-async def search_businesses(
-    data: SearchRequest,
-    current_user: UserResponse = Depends(get_current_user),
-):
-    """Search for real businesses with weak web presence globally using AI-powered discovery."""
-    try:
-        results = await generate_search_results(
-            query=data.query,
-            country=data.country,
-            category=data.category,
-            web_presence=data.web_presence,
-            limit=data.limit,
-        )
-
-        return SearchResponse(
-            results=results,
-            total=len(results),
-            filters_applied={
-                "query": data.query,
-                "country": data.country,
-                "category": data.category,
-                "web_presence": data.web_presence,
-            }
-        )
-    except Exception as e:
-        logger.error(f"Search error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.get("/filters", response_model=FiltersResponse)

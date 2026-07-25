@@ -13,6 +13,7 @@ import { client } from '@/lib/api';
 import { toast } from 'sonner';
 import { ArrowLeft, Globe, Mail, Phone, Save, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getDataSourceBadge } from './Leads';
 
 interface Lead {
   id: number;
@@ -30,6 +31,7 @@ interface Lead {
   priority: string;
   notes_count: number;
   last_contacted: string;
+  data_source?: string | null;
 }
 
 interface Note {
@@ -142,7 +144,17 @@ export default function AppLeadDetail() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-xl font-bold text-slate-900">{lead.business_name}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900">{lead.business_name}</h1>
+              {(() => {
+                const badge = getDataSourceBadge(lead?.data_source);
+                return (
+                  <Badge variant="outline" className={cn('text-xs', badge.className)} title={badge.title}>
+                    {badge.label}
+                  </Badge>
+                );
+              })()}
+            </div>
             <p className="text-sm text-slate-500">{lead.category} · {lead.location}, {lead.country}</p>
           </div>
         </div>

@@ -24,5 +24,8 @@ class Leads(Base):
     priority = Column(String, nullable=True, default='medium', server_default='medium')
     notes_count = Column(Integer, nullable=True, default=0, server_default='0')
     last_contacted = Column(String, nullable=True, default='', server_default='')
+    # Provenance. NULL means unknown — deliberately not defaulted, because an
+    # unknown origin must stay distinguishable from a verified one.
+    data_source = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

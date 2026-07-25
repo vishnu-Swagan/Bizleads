@@ -69,7 +69,11 @@ async def lifespan(app: FastAPI):
 
     # MODULE_STARTUP_START
     await initialize_database()
-    await initialize_mock_data()
+    if os.environ.get("SEED_MOCK_DATA", "").lower() in ("true", "1", "yes"):
+        logger.info("SEED_MOCK_DATA is set; loading sample records")
+        await initialize_mock_data()
+    else:
+        logger.info("Mock data seeding disabled (set SEED_MOCK_DATA=true to enable)")
     await initialize_admin_user()
     # MODULE_STARTUP_END
 
@@ -89,9 +93,43 @@ app = FastAPI(
 
 
 # MODULE_MIDDLEWARE_START
+_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+
+
+def _parse_allowed_origins(raw: str | None) -> list[str]:
+    """Parse a comma-separated ALLOWED_ORIGINS value into a clean origin list.
+
+    Strips whitespace around each entry and drops empties, so a trailing comma
+    or a space after a comma cannot silently produce a broken origin. Rejects a
+    bare "*" entry outright: Starlette's CORSMiddleware treats "*" in
+    allow_origins as allow_all_origins, and because this API sets
+    allow_credentials=True, that combination makes it echo back whatever Origin
+    header the caller sent - i.e. any origin accepted with credentials, exactly
+    the vulnerability this allowlist exists to close. A wildcard entry is
+    logged and dropped rather than silently passed through.
+    """
+    origins = [origin.strip() for origin in (raw if raw is not None else _DEFAULT_ORIGINS).split(",") if origin.strip()]
+
+    cleaned = []
+    for origin in origins:
+        if origin == "*":
+            logging.getLogger(__name__).warning(
+                "ALLOWED_ORIGINS contains '*', which is not permitted because this "
+                "API sends allow_credentials=True (combining the two would let "
+                "Starlette's CORSMiddleware echo back any Origin header with "
+                "credentials allowed). Ignoring this entry."
+            )
+            continue
+        cleaned.append(origin)
+
+    return cleaned
+
+
+_allowed_origins = _parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

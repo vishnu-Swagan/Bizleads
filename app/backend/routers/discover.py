@@ -12,17 +12,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from dependencies.auth import get_current_user
+from dependencies.tenancy import ensure_workspace_for_user
 from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.search_jobs import Search_jobs
-from services.business_search import discover_businesses
 from services.scoring import build_score_breakdown
 from services.mapbox_places import is_mapbox_configured, search_places
-from services.pagespeed import is_pagespeed_configured, audit_website
+from services.pagespeed import is_pagespeed_configured
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/discover", tags=["discover"])
+
+# Both passes currently perform identical work: audit_website is imported but
+# never invoked. Charging 3 for the deep pass was billing users for an audit
+# that does not run. Restore the differential when the deep pass does more.
+CREDIT_COST_PER_PASS = {"quick": 1, "deep": 1}
+
+
+def credit_cost_for(pass_type: str) -> int:
+    return CREDIT_COST_PER_PASS.get(pass_type, 1)
 
 
 class DiscoverRequest(BaseModel):
@@ -56,22 +65,20 @@ async def estimate_search(
     """Estimate credit cost and processing time before running search"""
     # Get workspace credits
     result = await db.execute(
-        select(Workspaces).where(Workspaces.owner_id == current_user.id)
+        select(Workspaces).where(Workspaces.owner_id == current_user.id).order_by(Workspaces.id.asc()).limit(1)
     )
-    workspace = result.scalar_one_or_none()
+    workspace = result.scalars().first()
 
     credits_remaining = 0
     if workspace:
         credits_remaining = workspace.monthly_credits - workspace.credits_used
 
     # Estimate costs
-    credit_cost = 1 if data.pass_type == "quick" else 3
+    credit_cost = credit_cost_for(data.pass_type)
     estimated_results = min(data.limit, 15)
     estimated_time_seconds = 15 if data.pass_type == "quick" else 45
 
-    providers_used = ["AI Discovery Engine"]
-    if data.pass_type == "deep":
-        providers_used.extend(["Website Audit", "Performance Check"])
+    providers_used = ["MapBox Places"] if is_mapbox_configured() else []
 
     return {
         "credit_cost": credit_cost,
@@ -80,6 +87,7 @@ async def estimate_search(
         "estimated_results": estimated_results,
         "estimated_time_seconds": estimated_time_seconds,
         "providers": providers_used,
+        "provider_configured": is_mapbox_configured(),
         "data_freshness": "Real-time AI analysis",
         "pass_type": data.pass_type,
     }
@@ -91,34 +99,28 @@ async def run_discovery(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Run a discovery search job"""
-    # Check workspace and credits
-    result = await db.execute(
-        select(Workspaces).where(Workspaces.owner_id == current_user.id)
-    )
-    workspace = result.scalar_one_or_none()
+    """Run a discovery search.
 
-    if not workspace:
-        # Auto-create trial workspace
-        from datetime import timedelta
-        workspace = Workspaces(
-            name=f"{current_user.email}'s Workspace",
-            slug=current_user.id[:8],
-            owner_id=current_user.id,
-            plan="trial",
-            subscription_status="trialing",
-            monthly_credits=25,
-            credits_used=0,
-            max_seats=1,
-            trial_ends_at=(datetime.utcnow() + timedelta(days=7)).isoformat(),
-            credits_reset_at=(datetime.utcnow() + timedelta(days=30)).isoformat(),
-        )
-        db.add(workspace)
-        await db.commit()
-        await db.refresh(workspace)
+    The provider check happens before any job row or credit deduction, so an
+    unconfigured provider costs the user nothing. There is deliberately no AI
+    fallback: fabricated businesses must never be returned as live results.
+    """
+    workspace = await ensure_workspace_for_user(current_user, db)
 
+    if not is_mapbox_configured():
+        return {
+            "status": "provider_unconfigured",
+            "error": "provider_unconfigured",
+            "message": "No discovery provider is connected. Add a MapBox access token in Settings to run searches.",
+            "provider": "mapbox",
+            "results": [],
+            "total_results": 0,
+            "credits_charged": 0,
+            "credits_remaining": workspace.monthly_credits - workspace.credits_used,
+        }
+
+    credit_cost = credit_cost_for(data.pass_type)
     credits_remaining = workspace.monthly_credits - workspace.credits_used
-    credit_cost = 1 if data.pass_type == "quick" else 3
 
     if credits_remaining < credit_cost:
         raise HTTPException(
@@ -129,10 +131,9 @@ async def run_discovery(
                 "credits_remaining": credits_remaining,
                 "credits_required": credit_cost,
                 "upgrade_url": "/app/settings/billing",
-            }
+            },
         )
 
-    # Create search job record
     job = Search_jobs(
         user_id=current_user.id,
         workspace_id=workspace.id,
@@ -148,41 +149,19 @@ async def run_discovery(
     workspace.credits_used += credit_cost
     await db.commit()
     await db.refresh(job)
-
+    await db.refresh(workspace)
     job_id = job.id
-    await db.rollback()  # Close transaction before slow external call
+    credits_left = workspace.monthly_credits - workspace.credits_used
 
-    # Run discovery - prefer MapBox API when configured
     try:
-        raw_results = []
-        data_source = "ai"
+        raw_results = await search_places(
+            query=data.query or "",
+            location=data.city or data.region or "",
+            category=data.category,
+            country=data.country,
+            limit=data.limit,
+        )
 
-        if is_mapbox_configured():
-            # Use MapBox API for real business/POI data
-            data_source = "mapbox"
-            raw_results = await search_places(
-                query=data.query or "",
-                location=data.city or data.region or "",
-                category=data.category,
-                country=data.country,
-                limit=data.limit,
-            )
-            logger.info(f"MapBox returned {len(raw_results)} results")
-
-        # Fall back to AI discovery if MapBox returns no results or is not configured
-        if not raw_results:
-            data_source = "ai"
-            raw_results = await discover_businesses(
-                query=data.query,
-                country=data.country,
-                region=data.region,
-                city=data.city,
-                category=data.category,
-                website_state=data.website_state,
-                limit=data.limit,
-            )
-
-        # Enrich with scoring
         scored_results = []
         for biz in raw_results:
             score_data = build_score_breakdown(biz)
@@ -192,12 +171,11 @@ async def run_discovery(
             biz["website_state"] = score_data["website_state"]
             biz["score_version"] = score_data["score_version"]
             biz["risk_reasons"] = score_data.get("risk_reasons", [])
+            biz["data_source"] = "provider"
             scored_results.append(biz)
 
-        # Sort by priority
         scored_results.sort(key=lambda x: x.get("priority_score", 0), reverse=True)
 
-        # Update job status
         result = await db.execute(select(Search_jobs).where(Search_jobs.id == job_id))
         job = result.scalar_one_or_none()
         if job:
@@ -210,19 +188,18 @@ async def run_discovery(
 
         return {
             "job_id": job_id,
-            "status": "complete",
+            "status": "complete" if scored_results else "no_matches",
             "results": scored_results,
             "total_results": len(scored_results),
             "credits_charged": credit_cost,
-            "credits_remaining": workspace.monthly_credits - workspace.credits_used,
+            "credits_remaining": credits_left,
             "pass_type": data.pass_type,
             "score_version": "1.0.0",
-            "data_source": data_source,
+            "data_source": "mapbox",
         }
 
     except Exception as e:
         logger.error(f"Discovery failed: {e}")
-        # Mark job as failed, return credit
         result = await db.execute(select(Search_jobs).where(Search_jobs.id == job_id))
         job = result.scalar_one_or_none()
         if job:
@@ -230,11 +207,8 @@ async def run_discovery(
             job.error_message = str(e)[:500]
             job.progress_pct = 0
 
-        # Refund credit
-        result2 = await db.execute(
-            select(Workspaces).where(Workspaces.owner_id == current_user.id)
-        )
-        ws = result2.scalar_one_or_none()
+        ws_result = await db.execute(select(Workspaces).where(Workspaces.id == workspace.id))
+        ws = ws_result.scalar_one_or_none()
         if ws:
             ws.credits_used = max(0, ws.credits_used - credit_cost)
 
@@ -246,7 +220,7 @@ async def run_discovery(
                 "error": "discovery_failed",
                 "message": "Discovery search failed. Credits have been refunded.",
                 "job_id": job_id,
-            }
+            },
         )
 
 
@@ -319,7 +293,7 @@ async def get_discovery_filters():
             {"value": "unknown", "label": "Status Unknown"},
         ],
         "pass_types": [
-            {"value": "quick", "label": "Quick Discovery (1 credit)", "description": "Fast entity resolution and basic scoring"},
-            {"value": "deep", "label": "Deep Analysis (3 credits)", "description": "Full audit, screenshots, competitor benchmark"},
+            {"value": "quick", "label": "Quick Discovery (1 credit)", "description": "Entity resolution and basic scoring"},
+            {"value": "deep", "label": "Deep Analysis (1 credit)", "description": "Currently identical to Quick; website audits are not yet wired up"},
         ],
     }

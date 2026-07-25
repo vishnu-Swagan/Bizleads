@@ -33,7 +33,7 @@ const tutorialSteps: TutorialStep[] = [
   {
     id: 'discover',
     title: 'Discover',
-    description: 'Find businesses with weak digital presence using AI-powered search and Google Places data. Each result is scored across 6 dimensions.',
+    description: 'Find businesses with weak digital presence using MapBox place search. Each result is scored across 6 dimensions.',
     icon: Search,
     targetPath: '/app/discover',
     tip: 'Use specific categories and locations for the best results. Click "Scores" on any result to see the full breakdown.',

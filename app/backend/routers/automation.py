@@ -12,7 +12,7 @@ from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
 from models.leads import Leads
 from models.ai_interaction_logs import Ai_interaction_logs
-from services.ai_automation import generate_new_leads, generate_followup_email, generate_daily_report
+from services.ai_automation import generate_followup_email, generate_daily_report
 from services.ai_interaction_logger import AIInteractionLogger
 from services.email_service import send_followup_email, generate_and_send_email
 
@@ -22,28 +22,6 @@ router = APIRouter(prefix="/api/v1/automation", tags=["automation"])
 
 
 # ─── Request/Response Models ───────────────────────────────────────────────────
-
-class GenerateLeadsRequest(BaseModel):
-    country: Optional[str] = None
-    category: Optional[str] = None
-    count: int = 5
-    # Advanced targeting filters
-    min_website_score: int = 0
-    max_website_score: int = 30
-    min_social_score: int = 0
-    max_social_score: int = 25
-    business_size: Optional[str] = None  # small, medium, large
-    years_in_business: Optional[str] = None  # new (0-2), established (3-10), veteran (10+)
-    target_revenue: Optional[str] = None  # under_100k, 100k_500k, 500k_1m, over_1m
-    intent_signals: Optional[List[str]] = None  # hiring, expanding, rebranding, new_location
-
-
-class GenerateLeadsResponse(BaseModel):
-    leads_generated: int
-    leads: List[Dict[str, Any]]
-    message: str
-    targeting_summary: Optional[str] = None
-
 
 class FollowUpRequest(BaseModel):
     lead_id: int
@@ -103,117 +81,6 @@ class InteractionLogsResponse(BaseModel):
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────────────
-
-@router.post("/generate-leads", response_model=GenerateLeadsResponse)
-async def auto_generate_leads(
-    data: GenerateLeadsRequest,
-    current_user: UserResponse = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Use AI to automatically generate new business leads with advanced targeting."""
-    ai_logger = AIInteractionLogger(db, current_user.id)
-    ai_logger.start()
-
-    input_summary = f"Generate {data.count} leads"
-    if data.country:
-        input_summary += f" in {data.country}"
-    if data.category:
-        input_summary += f", category: {data.category}"
-    if data.business_size:
-        input_summary += f", size: {data.business_size}"
-    if data.intent_signals:
-        input_summary += f", signals: {', '.join(data.intent_signals)}"
-
-    try:
-        # Close DB before AI call
-        await db.rollback()
-
-        # Generate leads using AI with enhanced targeting
-        new_leads = await generate_new_leads(
-            country=data.country,
-            category=data.category,
-            count=data.count,
-            min_website_score=data.min_website_score,
-            max_website_score=data.max_website_score,
-            min_social_score=data.min_social_score,
-            max_social_score=data.max_social_score,
-            business_size=data.business_size,
-            years_in_business=data.years_in_business,
-            target_revenue=data.target_revenue,
-            intent_signals=data.intent_signals,
-        )
-
-        if not new_leads:
-            await ai_logger.log(
-                action_type="generate_leads",
-                input_summary=input_summary,
-                output_summary="No leads generated",
-                status="failed",
-            )
-            raise HTTPException(status_code=500, detail="AI failed to generate leads. Please try again.")
-
-        # Save generated leads to database
-        saved_leads = []
-        for lead_data in new_leads:
-            notes = lead_data.pop("notes", "")
-            lead = Leads(
-                user_id=current_user.id,
-                business_name=lead_data["business_name"],
-                category=lead_data["category"],
-                location=lead_data["location"],
-                country=lead_data["country"],
-                contact_email=lead_data.get("contact_email", ""),
-                contact_phone=lead_data.get("contact_phone", ""),
-                website_url=lead_data.get("website_url", ""),
-                website_score=lead_data.get("website_score", 0),
-                social_score=lead_data.get("social_score", 0),
-                has_website=lead_data.get("has_website", False),
-                pipeline_stage="new_lead",
-                priority=lead_data.get("priority", "medium"),
-            )
-            db.add(lead)
-            saved_leads.append({**lead_data, "notes": notes})
-
-        await db.commit()
-
-        # Build targeting summary
-        targeting_parts = []
-        if data.business_size:
-            targeting_parts.append(f"Size: {data.business_size}")
-        if data.target_revenue:
-            targeting_parts.append(f"Revenue: {data.target_revenue}")
-        if data.intent_signals:
-            targeting_parts.append(f"Signals: {', '.join(data.intent_signals)}")
-        targeting_summary = " | ".join(targeting_parts) if targeting_parts else None
-
-        # Log the interaction
-        await ai_logger.log(
-            action_type="generate_leads",
-            input_summary=input_summary,
-            output_summary=f"Generated {len(saved_leads)} leads: {', '.join(l['business_name'] for l in saved_leads[:3])}...",
-            status="success",
-            metadata={"count": len(saved_leads), "filters": data.model_dump()},
-        )
-
-        return GenerateLeadsResponse(
-            leads_generated=len(saved_leads),
-            leads=saved_leads,
-            message=f"Successfully generated and saved {len(saved_leads)} new leads to your CRM.",
-            targeting_summary=targeting_summary,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Auto lead generation error: {e}", exc_info=True)
-        await db.rollback()
-        await ai_logger.log(
-            action_type="generate_leads",
-            input_summary=input_summary,
-            output_summary=str(e)[:200],
-            status="failed",
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to generate leads: {str(e)}")
-
 
 @router.post("/follow-up-email", response_model=FollowUpResponse)
 async def generate_follow_up(
