@@ -27,6 +27,7 @@ interface Lead {
   priority: string;
   contact_email: string;
   created_at: string;
+  data_source?: string | null;
 }
 
 const stageLabels: Record<string, string> = {
@@ -44,6 +45,39 @@ const stageBadgeClass: Record<string, string> = {
   won: 'bg-green-50 text-green-700 border-green-200',
   lost: 'bg-slate-50 text-slate-500 border-slate-200',
 };
+
+const dataSourceBadge: Record<string, { label: string; className: string; title: string }> = {
+  provider: {
+    label: 'Verified source',
+    className: 'bg-green-50 text-green-700 border-green-200',
+    title: 'Sourced from a connected data provider.',
+  },
+  manual: {
+    label: 'Added manually',
+    className: 'bg-slate-50 text-slate-700 border-slate-200',
+    title: 'Entered by a team member.',
+  },
+  ai_generated: {
+    label: 'AI-generated — unverified',
+    className: 'bg-red-50 text-red-700 border-red-200',
+    title: 'Produced by an AI model. This business may not exist. Verify before contacting.',
+  },
+  mock: {
+    label: 'Sample data',
+    className: 'bg-slate-50 text-slate-400 border-slate-200',
+    title: 'Seeded demo record, not a real business.',
+  },
+};
+
+const unverifiedBadge = {
+  label: 'Unverified',
+  className: 'bg-amber-50 text-amber-700 border-amber-200',
+  title: 'Origin unknown — this lead predates provenance tracking. Verify before contacting.',
+};
+
+export function getDataSourceBadge(source?: string | null) {
+  return (source && dataSourceBadge[source]) || unverifiedBadge;
+}
 
 export default function AppLeads() {
   const { user } = useAuth();
@@ -162,6 +196,7 @@ export default function AppLeads() {
                   <TableHead className="font-medium text-slate-600">Location</TableHead>
                   <TableHead className="font-medium text-slate-600">Stage</TableHead>
                   <TableHead className="font-medium text-slate-600">Priority</TableHead>
+                  <TableHead className="text-xs font-medium text-slate-600">Source</TableHead>
                   <TableHead className="font-medium text-slate-600">Web Score</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -193,6 +228,16 @@ export default function AppLeads() {
                       )}>
                         {lead.priority}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const badge = getDataSourceBadge(lead.data_source);
+                        return (
+                          <Badge variant="outline" className={cn('text-xs', badge.className)} title={badge.title}>
+                            {badge.label}
+                          </Badge>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-sm text-slate-600">
                       {lead.has_website ? `${lead.website_score}/100` : 'None'}
