@@ -2,8 +2,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Target, CheckCircle2, ArrowRight } from 'lucide-react';
+import { CheckCircle2, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { LogoMark } from '@/components/Logo';
+import SiteFooter from '@/components/SiteFooter';
 
 const plans = [
   {
@@ -71,15 +73,16 @@ export default function Pricing() {
       {/* Header */}
       <header className="border-b border-slate-100">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('/')}>
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600">
-              <Target className="h-5 w-5 text-white" />
-            </div>
-            <span className="font-semibold text-lg text-slate-900">BizLeads</span>
+          <div className="flex items-center gap-2 min-w-0 cursor-pointer" onClick={() => navigate('/')}>
+            <LogoMark className="h-9 w-9 shrink-0" />
+            <span className="font-semibold text-lg text-slate-900 hidden xs:inline">BizLeads</span>
           </div>
-          <div className="flex items-center gap-2">
-            <Button onClick={login} variant="ghost" size="sm">Sign In</Button>
-            <Button onClick={login} size="sm" className="bg-indigo-600 hover:bg-indigo-700">Start Free Trial</Button>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <Button onClick={login} variant="ghost" size="sm" className="hidden xs:inline-flex">Sign In</Button>
+            <Button onClick={login} size="sm" className="bg-indigo-600 hover:bg-indigo-700 whitespace-nowrap">
+              <span className="sm:hidden">Try free</span>
+              <span className="hidden sm:inline">Start Free Trial</span>
+            </Button>
           </div>
         </div>
       </header>
@@ -172,12 +175,7 @@ export default function Pricing() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 py-8">
-        <div className="mx-auto max-w-7xl px-4 text-center">
-          <p className="text-xs text-slate-500">© 2024 BizLeads. All prices in USD.</p>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

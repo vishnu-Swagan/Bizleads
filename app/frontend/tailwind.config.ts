@@ -21,6 +21,14 @@ export default {
       },
     },
     extend: {
+      screens: {
+        // Tailwind's smallest default breakpoint is sm:640px, which leaves
+        // everything from 320px to 639px sharing one layout. Real phones
+        // start at 320px (Galaxy Fold cover, iPhone SE 1st gen), and a
+        // header that fits at 430px can overflow at 320px. This is the
+        // dividing line between "narrowest phones" and "ordinary phones".
+        xs: '360px',
+      },
       colors: {
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',

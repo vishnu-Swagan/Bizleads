@@ -4,6 +4,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Target, ArrowRight, Search, BarChart3, Zap, Shield, CheckCircle2, Star } from 'lucide-react';
+import { LogoMark } from '@/components/Logo';
+import SiteFooter from '@/components/SiteFooter';
 
 export default function Index() {
   const { user, login, loading } = useAuth();
@@ -28,23 +30,22 @@ export default function Index() {
       {/* Header */}
       <header className="border-b border-slate-100">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600">
-              <Target className="h-5 w-5 text-white" />
-            </div>
-            <span className="font-semibold text-lg text-slate-900">BizLeads</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <LogoMark className="h-9 w-9 shrink-0" />
+            <span className="font-semibold text-lg text-slate-900 hidden xs:inline">BizLeads</span>
           </div>
           <nav className="hidden md:flex items-center gap-6">
             <button onClick={() => navigate('/pricing')} className="text-sm text-slate-600 hover:text-slate-900 font-medium">
               Pricing
             </button>
           </nav>
-          <div className="flex items-center gap-2">
-            <Button onClick={login} variant="ghost" size="sm" className="text-slate-700">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <Button onClick={login} variant="ghost" size="sm" className="text-slate-700 hidden xs:inline-flex">
               Sign In
             </Button>
-            <Button onClick={login} size="sm" className="bg-indigo-600 hover:bg-indigo-700">
-              Start Free Trial
+            <Button onClick={login} size="sm" className="bg-indigo-600 hover:bg-indigo-700 whitespace-nowrap">
+              <span className="sm:hidden">Try free</span>
+              <span className="hidden sm:inline">Start Free Trial</span>
             </Button>
           </div>
         </div>
@@ -202,22 +203,7 @@ export default function Index() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 py-8">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-600">
-                <Target className="h-3.5 w-3.5 text-white" />
-              </div>
-              <span className="font-semibold text-sm text-slate-900">BizLeads</span>
-            </div>
-            <p className="text-xs text-slate-500">
-              © 2024 BizLeads. Website Opportunity Intelligence.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

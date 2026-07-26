@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Target, Loader2 } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { client } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { LogoMark } from '@/components/Logo';
 
 type Mode = 'signin' | 'signup' | 'forgot';
 
@@ -84,9 +85,7 @@ export default function Login() {
           className="flex items-center gap-2 mx-auto mb-8 cursor-pointer"
           aria-label="BizLeads home"
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
-            <Target className="h-5 w-5 text-white" />
-          </div>
+          <LogoMark className="h-10 w-10" />
           <span className="text-xl font-semibold text-slate-900">BizLeads</span>
         </button>
 
@@ -148,6 +147,37 @@ export default function Login() {
                 {busy && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 {busy ? copy.busy : copy.action}
               </Button>
+
+              {/*
+                Shown at the point of signup, immediately above the action that
+                forms the contract. Terms linked only from a footer are hard to
+                argue were ever presented; terms sitting on the button the user
+                pressed are not. Opens in a new tab so reading them does not
+                discard a half-filled form.
+              */}
+              {mode === 'signup' && (
+                <p className="text-xs leading-relaxed text-slate-500 text-center">
+                  By creating an account you agree to our{' '}
+                  <Link
+                    to="/terms"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 underline underline-offset-2"
+                  >
+                    Terms of Service
+                  </Link>{' '}
+                  and{' '}
+                  <Link
+                    to="/privacy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 underline underline-offset-2"
+                  >
+                    Privacy Policy
+                  </Link>
+                  .
+                </p>
+              )}
             </form>
 
             <div className="mt-6 space-y-2 text-sm text-center">

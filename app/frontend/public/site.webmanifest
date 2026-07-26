@@ -1,0 +1,15 @@
+{
+  "name": "BizLeads — Website Opportunity Intelligence",
+  "short_name": "BizLeads",
+  "description": "Find local businesses whose websites are costing them customers.",
+  "start_url": "/app/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#4338CA",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

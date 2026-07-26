@@ -9,6 +9,10 @@ import AuthError from './pages/AuthError';
 import LogoutCallbackPage from './pages/LogoutCallbackPage';
 import Pricing from './pages/Pricing';
 import Login from './pages/Login';
+import Terms from './pages/legal/Terms';
+import Privacy from './pages/legal/Privacy';
+import Cookies from './pages/legal/Cookies';
+import Subprocessors from './pages/legal/Subprocessors';
 import AppDashboard from './pages/app/Dashboard';
 import AppDiscover from './pages/app/Discover';
 import AppLeads from './pages/app/Leads';
@@ -25,6 +29,13 @@ const AppRoutes = () => (
     {/* Public routes */}
     <Route path="/" element={<Index />} />
     <Route path="/pricing" element={<Pricing />} />
+
+    {/* Public policy pages. Reachable without an account on purpose:
+        terms nobody can read before signing up are terms nobody agreed to. */}
+    <Route path="/terms" element={<Terms />} />
+    <Route path="/privacy" element={<Privacy />} />
+    <Route path="/cookies" element={<Cookies />} />
+    <Route path="/subprocessors" element={<Subprocessors />} />
     <Route path="/login" element={<Login />} />
     <Route path="/signup" element={<Login />} />
     <Route path="/forgot-password" element={<Login />} />

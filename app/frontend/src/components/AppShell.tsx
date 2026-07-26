@@ -23,6 +23,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import GuidedTutorial, { useTutorial } from '@/components/GuidedTutorial';
+import { LogoMark } from '@/components/Logo';
 
 interface AppShellProps {
   children: ReactNode;
@@ -64,9 +65,7 @@ export default function AppShell({ children }: AppShellProps) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-4">
         <div className="flex items-center gap-2 mb-6">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
-            <Target className="h-5 w-5 text-white" />
-          </div>
+          <LogoMark className="h-10 w-10" />
           <span className="font-semibold text-xl text-slate-900">BizLeads</span>
         </div>
         <p className="text-slate-600 mb-4">Sign in to access your workspace</p>
