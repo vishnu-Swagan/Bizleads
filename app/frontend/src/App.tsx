@@ -8,6 +8,7 @@ import AuthCallback from './pages/AuthCallback';
 import AuthError from './pages/AuthError';
 import LogoutCallbackPage from './pages/LogoutCallbackPage';
 import Pricing from './pages/Pricing';
+import Login from './pages/Login';
 import AppDashboard from './pages/app/Dashboard';
 import AppDiscover from './pages/app/Discover';
 import AppLeads from './pages/app/Leads';
@@ -24,6 +25,9 @@ const AppRoutes = () => (
     {/* Public routes */}
     <Route path="/" element={<Index />} />
     <Route path="/pricing" element={<Pricing />} />
+    <Route path="/login" element={<Login />} />
+    <Route path="/signup" element={<Login />} />
+    <Route path="/forgot-password" element={<Login />} />
     <Route path="/auth/callback" element={<AuthCallback />} />
     <Route path="/auth/error" element={<AuthError />} />
     <Route path="/logout/callback" element={<LogoutCallbackPage />} />

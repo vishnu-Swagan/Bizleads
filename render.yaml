@@ -1,0 +1,63 @@
+# Render blueprint for the BizLeads API.
+#
+# The frontend is deployed separately on Vercel; this hosts only the FastAPI
+# backend. Render runs it as a long-lived process, which is how the app is
+# written — it opens a connection pool at startup in its lifespan handler.
+# Serverless would create one pool per instance and exhaust Postgres.
+#
+# Secrets are NOT in this file. Every `sync: false` value must be set in the
+# Render dashboard (Environment tab) so nothing sensitive reaches the repo.
+
+services:
+  - type: web
+    name: bizleads-api
+    runtime: python
+    plan: free
+    region: frankfurt # nearest to the Supabase project in eu-west-2
+    rootDir: app/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+    envVars:
+      # --- Database ---
+      # Use the Supavisor POOLER host, not db.<ref>.supabase.co: the direct host
+      # is IPv6-only and unreachable from most networks.
+      # Session mode :5432 suits a long-lived process; :6543 is for serverless.
+      #   postgresql+asyncpg://postgres.<ref>:<pw>@aws-1-eu-west-2.pooler.supabase.com:5432/postgres
+      # Password must be percent-encoded (@ -> %40, $ -> %24).
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Supabase auth ---
+      # Tokens are verified against the published ES256 JWKS. There is no shared
+      # secret to configure; the backend holds only public material.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+
+      # --- CORS ---
+      # MUST contain the deployed frontend origin or every browser call fails.
+      # A bare "*" is rejected at startup: combined with credentials it would
+      # reopen the any-origin hole this app was audited for.
+      - key: ALLOWED_ORIGINS
+        value: https://project-h0zzq.vercel.app
+
+      # --- Providers ---
+      # Use a PUBLIC pk. token restricted by URL, never an sk. secret token.
+      - key: MAPBOX_ACCESS_TOKEN
+        sync: false
+      # Optional. Without it, website quality stays at the free heuristic tier.
+      - key: PAGESPEED_API_KEY
+        sync: false
+
+      # --- Safety rails ---
+      # Must not be "dev": the exception handler returns full stack traces when
+      # it is.
+      - key: ENVIRONMENT
+        value: production
+      # Deliberately absent: SEED_MOCK_DATA. Setting it true would seed eight
+      # fabricated sample leads into the database.
+      - key: PYTHON_VERSION
+        value: "3.13"

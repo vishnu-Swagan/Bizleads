@@ -71,6 +71,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   useEffect(() => {
     checkAuthStatus();
+    // Supabase refreshes tokens and can sign the user out in another tab.
+    // Without this subscription the UI keeps showing a session that no longer
+    // exists until the next full page load.
+    return client.auth.onChange(() => {
+      checkAuthStatus();
+    });
   }, []);
 
   const value: AuthContextType = {
