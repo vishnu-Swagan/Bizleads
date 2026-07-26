@@ -275,11 +275,16 @@ async def get_discovery_filters():
     return {
         "mapbox_connected": is_mapbox_configured(),
         "pagespeed_connected": is_pagespeed_configured(),
+        # Only countries where the provider actually returns business POIs.
+        # Japan, South Africa and Nigeria were removed after testing: MapBox
+        # returns zero POIs for every category there, including from major
+        # cities, so offering them meant a guaranteed "no businesses found"
+        # that still cost the user a credit.
         "countries": [
             "United States", "United Kingdom", "Canada", "Australia",
             "Germany", "France", "Spain", "Italy", "Netherlands",
-            "Brazil", "Mexico", "India", "Japan", "South Korea",
-            "South Africa", "Nigeria", "UAE", "Singapore",
+            "Ireland", "Portugal", "Poland", "Sweden", "New Zealand",
+            "Brazil", "Mexico", "India", "South Korea", "UAE", "Singapore",
         ],
         "categories": [
             "Restaurant", "Cafe", "Bar & Pub", "Bakery",

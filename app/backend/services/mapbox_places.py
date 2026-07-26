@@ -123,15 +123,15 @@ def canonical_category(label: Optional[str]) -> Optional[str]:
     return CATEGORY_MAP.get(label.strip())
 
 
-async def geocode_location(location_text: str, country: Optional[str] = None) -> Optional[Dict[str, float]]:
-    """Resolve a place name to coordinates, used as search proximity."""
+async def _geocode(query: str, types: str, country_code: Optional[str]) -> Optional[Dict[str, Any]]:
+    """One geocoding attempt. Returns coordinates and, when present, a bbox."""
     token = _token()
-    if not token or not location_text:
+    if not token or not query:
         return None
 
-    params: Dict[str, Any] = {"q": location_text, "access_token": token, "limit": 1, "types": "place,locality,postcode"}
-    if country and (code := COUNTRY_CODES.get(country)):
-        params["country"] = code
+    params: Dict[str, Any] = {"q": query, "access_token": token, "limit": 1, "types": types}
+    if country_code:
+        params["country"] = country_code
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -140,15 +140,65 @@ async def geocode_location(location_text: str, country: Optional[str] = None) ->
                 logger.warning("MapBox geocode failed: %s", response.status_code)
                 return None
             features = response.json().get("features", [])
-            if not features:
-                return None
-            coords = features[0].get("properties", {}).get("coordinates", {})
-            if "longitude" not in coords or "latitude" not in coords:
-                return None
-            return {"longitude": coords["longitude"], "latitude": coords["latitude"]}
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning("MapBox geocode error: %s", type(exc).__name__)
         return None
+
+    if not features:
+        return None
+
+    props = features[0].get("properties", {})
+    coords = props.get("coordinates") or {}
+    if "longitude" not in coords or "latitude" not in coords:
+        return None
+
+    result: Dict[str, Any] = {"longitude": coords["longitude"], "latitude": coords["latitude"]}
+    bbox = props.get("bbox")
+    # A bbox of four numbers lets a search cover a whole country rather than a
+    # point. Only countries and large regions carry one.
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        result["bbox"] = list(bbox)
+    return result
+
+
+async def geocode_location(
+    location_text: str, country: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Resolve a search area to coordinates, and a bbox when it is a country.
+
+    Two attempts, because they fail in different ways:
+
+      1. As a place/locality/postcode, filtered to the selected country. This
+         is the normal case — "Leeds", "SW1A 1AA".
+      2. As a country, unfiltered. Required when the user picks a country and
+         no city: querying "United Kingdom" with types=place AND country=GB
+         asks for a *town* called United Kingdom inside the UK, finds nothing,
+         and returns no proximity at all. MapBox's category endpoint returns
+         zero results without proximity or bbox, so every country-only search
+         reported "no businesses found".
+
+         The United States appeared to work only by accident — there is a
+         place called United States in Louisiana, so attempt 1 matched it and
+         searches were silently centred there.
+    """
+    if not location_text:
+        return None
+
+    country_code = COUNTRY_CODES.get(country) if country else None
+
+    # When the area to search IS the country, resolve it as a country. Looking
+    # it up as a place first matches whatever happens to share the name:
+    # "United States" matches a region in the US Virgin Islands, whose bbox is
+    # a few islands in the Caribbean, so a nationwide search returned nothing.
+    if country and location_text.strip().lower() == country.strip().lower():
+        return await _geocode(location_text, "country", None)
+
+    found = await _geocode(location_text, "place,locality,postcode,district,region", country_code)
+    if found:
+        return found
+
+    # Fall back to treating the text as a country name.
+    return await _geocode(location_text, "country", None)
 
 
 async def search_places(
@@ -171,8 +221,15 @@ async def search_places(
     params: Dict[str, Any] = {"access_token": token, "limit": limit}
     if country and (code := COUNTRY_CODES.get(country)):
         params["country"] = code
+
     if proximity:
         params["proximity"] = f"{proximity['longitude']},{proximity['latitude']}"
+        # When the area resolved to a country rather than a town, search its
+        # whole bounding box. A single centroid would return only businesses
+        # near the geographic middle of the country — for the UK, a field in
+        # Cumbria.
+        if not location and proximity.get("bbox"):
+            params["bbox"] = ",".join(str(v) for v in proximity["bbox"])
 
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
