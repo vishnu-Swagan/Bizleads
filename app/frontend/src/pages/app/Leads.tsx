@@ -20,9 +20,13 @@ interface Lead {
   category: string;
   location: string;
   country: string;
-  website_score: number;
-  social_score: number;
-  has_website: boolean;
+  // Null means nobody has measured this lead yet — distinct from a measured
+  // zero, and from has_website: false, which is a verdict Qualify reached.
+  // The rendering below already keeps the three states apart; these types
+  // now say so, instead of describing a payload the API never sends.
+  website_score: number | null;
+  social_score: number | null;
+  has_website: boolean | null;
   pipeline_stage: string;
   priority: string;
   contact_email: string;

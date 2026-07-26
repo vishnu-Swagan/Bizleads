@@ -30,9 +30,14 @@ interface BusinessResult {
   location: string;
   country: string;
   website_url: string;
-  website_score: number;
-  social_score: number;
-  has_website: boolean;
+  // Null until Qualify measures the site. Pass 1 never knows these, and
+  // `has_website` is null — not false — when the provider simply has no
+  // website on record. Typing them as non-nullable let code like
+  // `biz.website_score > 50` compile while silently reading unknown as zero,
+  // which is the one claim this product must never make.
+  website_score: number | null;
+  social_score: number | null;
+  has_website: boolean | null;
   contact_email: string;
   contact_phone: string;
   priority_score: number;
