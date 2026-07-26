@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.search_jobs import Search_jobs
 from services.scoring import build_score_breakdown
-from services.mapbox_places import is_mapbox_configured, search_places
+from services.mapbox_places import MAX_LIMIT, is_mapbox_configured, search_places
 from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
 from services.leads import LeadsService
@@ -46,7 +46,7 @@ class DiscoverRequest(BaseModel):
     min_need: Optional[int] = 0
     min_buyability: Optional[int] = 0
     min_priority: Optional[int] = 0
-    limit: int = 15
+    limit: int = Field(default=MAX_LIMIT, ge=1, le=MAX_LIMIT)
     pass_type: str = "quick"  # quick (Pass 1) or deep (Pass 2)
 
 
@@ -54,7 +54,7 @@ class EstimateRequest(BaseModel):
     query: Optional[str] = None
     country: Optional[str] = None
     category: Optional[str] = None
-    limit: int = 15
+    limit: int = Field(default=MAX_LIMIT, ge=1, le=MAX_LIMIT)
     pass_type: str = "quick"
 
 
@@ -77,7 +77,7 @@ async def estimate_search(
 
     # Estimate costs
     credit_cost = credit_cost_for(data.pass_type)
-    estimated_results = min(data.limit, 15)
+    estimated_results = min(data.limit, MAX_LIMIT)
     estimated_time_seconds = 15 if data.pass_type == "quick" else 45
 
     providers_used = ["MapBox Places"] if is_mapbox_configured() else []

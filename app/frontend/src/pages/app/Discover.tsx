@@ -113,7 +113,7 @@ export default function AppDiscover() {
           query: query || null,
           country: country === 'all' ? null : country,
           category: category === 'all' ? null : category,
-          limit: 15,
+          limit: 25,
           pass_type: passType,
         },
       });
@@ -146,7 +146,7 @@ export default function AppDiscover() {
           country: country === 'all' ? null : country,
           category: category === 'all' ? null : category,
           website_state: websiteState,
-          limit: 15,
+          limit: 25,
           pass_type: passType,
         },
         options: { timeout: 120000 },
@@ -562,7 +562,7 @@ export default function AppDiscover() {
                             Scores
                           </Button>
                         </SheetTrigger>
-                        <SheetContent className="w-[400px] sm:w-[540px]">
+                        <SheetContent className="w-full sm:max-w-[540px] overflow-y-auto">
                           <SheetHeader>
                             <SheetTitle>Score Breakdown: {biz.business_name}</SheetTitle>
                           </SheetHeader>

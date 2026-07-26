@@ -264,7 +264,7 @@ export default function AppLeads() {
             )}
           </div>
         ) : (
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
+          <div className="rounded-lg border border-slate-200 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50">

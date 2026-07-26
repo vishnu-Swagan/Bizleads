@@ -88,3 +88,39 @@ async def test_deep_pass_costs_one_credit(user_a_client, db_session, monkeypatch
     response = await user_a_client.post("/api/v1/discover/estimate", json={"pass_type": "deep"})
     assert response.status_code == 200
     assert response.json()["credit_cost"] == 1
+
+
+async def test_estimate_reports_the_full_provider_yield(user_a_client, db_session, monkeypatch):
+    """One credit should buy as many leads as the provider will return.
+
+    The estimate hardcoded a ceiling of 15 while MapBox returns up to 25, so a
+    third of every paid search went unused and the estimate under-reported it.
+    """
+    await _seed_workspace(db_session)
+    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: True)
+
+    response = await user_a_client.post("/api/v1/discover/estimate", json={"category": "Restaurant"})
+
+    assert response.status_code == 200
+    assert response.json()["estimated_results"] == discover.MAX_LIMIT
+
+
+async def test_limit_above_the_provider_ceiling_is_rejected(user_a_client, db_session):
+    """`limit` was an unconstrained int — a client could ask for millions."""
+    await _seed_workspace(db_session)
+
+    response = await user_a_client.post(
+        "/api/v1/discover/run", json={"category": "Restaurant", "limit": 100_000}
+    )
+
+    assert response.status_code == 422
+
+
+async def test_limit_below_one_is_rejected(user_a_client, db_session):
+    await _seed_workspace(db_session)
+
+    response = await user_a_client.post(
+        "/api/v1/discover/run", json={"category": "Restaurant", "limit": 0}
+    )
+
+    assert response.status_code == 422
