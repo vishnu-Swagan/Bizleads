@@ -90,7 +90,9 @@ async def estimate_search(
         "estimated_time_seconds": estimated_time_seconds,
         "providers": providers_used,
         "provider_configured": is_mapbox_configured(),
-        "data_freshness": "Real-time AI analysis",
+        # Was "Real-time AI analysis" — discovery has used a licensed
+        # provider since the AI fabrication path was removed.
+        "data_freshness": "Live provider data",
         "pass_type": data.pass_type,
     }
 

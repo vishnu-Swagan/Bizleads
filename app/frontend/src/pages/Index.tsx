@@ -139,7 +139,7 @@ export default function Index() {
           </h2>
           <div className="grid gap-8 md:grid-cols-4">
             {[
-              { step: '1', title: 'Discover', desc: 'AI-powered search finds real businesses matching your ideal client profile, scored across 6 dimensions.' },
+              { step: '1', title: 'Discover', desc: 'Search licensed business data by location and category. Real businesses only — never generated.' },
               { step: '2', title: 'Qualify', desc: 'Deep audit reveals the exact digital gaps, timing signals, and buyability evidence for each prospect.' },
               { step: '3', title: 'Prove', desc: 'Generate a Revenue Gap Twin and shareable Proof Room showing the prospect exactly why they need you now.' },
               { step: '4', title: 'Close', desc: 'Evidence-based outreach with personalized pitches. Track outcomes and calibrate your scoring over time.' },

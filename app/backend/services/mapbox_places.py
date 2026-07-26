@@ -231,26 +231,51 @@ async def search_places(
         if not location and proximity.get("bbox"):
             params["bbox"] = ",".join(str(v) for v in proximity["bbox"])
 
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            if canonical:
-                url = f"{SEARCHBOX_URL}/category/{quote(canonical)}"
-            else:
-                url = f"{SEARCHBOX_URL}/forward"
-                text = " ".join(p for p in [query, category, location] if p) or "business"
-                params["q"] = text
+    keyword = (query or "").strip()
 
-            response = await client.get(url, params=params)
-            if response.status_code != 200:
-                logger.error("MapBox search failed: %s %s", response.status_code, response.text[:300])
-                return []
+    async def _fetch(url: str, extra: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """One search request. None means the call failed; [] means no matches."""
+        try:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                response = await client.get(url, params={**params, **extra})
+                if response.status_code != 200:
+                    logger.error(
+                        "MapBox search failed: %s %s", response.status_code, response.text[:300]
+                    )
+                    return None
+                return response.json().get("features", [])
+        except httpx.HTTPError as exc:
+            logger.error("MapBox search error: %s", type(exc).__name__)
+            return None
+        except ValueError:
+            logger.error("MapBox returned malformed JSON")
+            return None
 
-            features = response.json().get("features", [])
-    except httpx.HTTPError as exc:
-        logger.error("MapBox search error: %s", type(exc).__name__)
-        return []
-    except ValueError:
-        logger.error("MapBox returned malformed JSON")
+    if canonical and keyword:
+        # Both a category and a keyword. The category endpoint takes no query
+        # parameter, so routing here would have discarded the keyword entirely:
+        # "vegan" + Restaurant returned every restaurant in the city, and the
+        # word the user typed changed nothing about the results.
+        #
+        # Forward search accepts poi_category, which applies the keyword as a
+        # relevance query *within* the category — the behaviour the search box
+        # has always implied.
+        features = await _fetch(
+            f"{SEARCHBOX_URL}/forward", {"q": keyword, "poi_category": canonical}
+        )
+        # A narrow keyword can legitimately match nothing. Falling back to the
+        # category alone returns the broader set rather than an empty page,
+        # which is more useful than "no businesses found".
+        if not features:
+            logger.info("Keyword %r matched nothing in %s; widening to category", keyword, canonical)
+            features = await _fetch(f"{SEARCHBOX_URL}/category/{quote(canonical)}", {})
+    elif canonical:
+        features = await _fetch(f"{SEARCHBOX_URL}/category/{quote(canonical)}", {})
+    else:
+        text = " ".join(p for p in [keyword, category, location] if p) or "business"
+        features = await _fetch(f"{SEARCHBOX_URL}/forward", {"q": text})
+
+    if not features:
         return []
 
     results = []

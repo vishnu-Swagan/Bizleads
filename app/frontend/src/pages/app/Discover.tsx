@@ -84,6 +84,10 @@ export default function AppDiscover() {
   const [hasSearched, setHasSearched] = useState(false);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
+  // Indices already written to the CRM. Saving is not idempotent server-side,
+  // so a second click would create a duplicate lead; this is what prevents it.
+  const [savedIndices, setSavedIndices] = useState<Set<number>>(new Set());
+  const [savingAll, setSavingAll] = useState(false);
   const [jobStatus, setJobStatus] = useState<string>('');
   const [dataSource, setDataSource] = useState<string>('');
 
@@ -149,6 +153,7 @@ export default function AppDiscover() {
       });
 
       const status = res.data?.status;
+      setSavedIndices(new Set());
       setResults(res.data?.results || []);
       setDataSource(res.data?.data_source || '');
 
@@ -181,34 +186,81 @@ export default function AppDiscover() {
     }
   };
 
+  const leadPayload = (biz: BusinessResult) => ({
+    business_name: biz.business_name,
+    category: biz.category,
+    location: biz.location,
+    country: biz.country,
+    website_url: biz.website_url || '',
+    // Null stays null. These are unknown until Qualify measures them, and
+    // coercing to 0/false here would claim a verdict nobody has established.
+    website_score: biz.website_score,
+    social_score: biz.social_score,
+    has_website: biz.has_website,
+    social_platforms: '[]',
+    contact_email: biz.contact_email || '',
+    contact_phone: biz.contact_phone || '',
+    pipeline_stage: 'new_lead',
+    priority: biz.priority_score >= 70 ? 'high' : biz.priority_score >= 40 ? 'medium' : 'low',
+    notes_count: 0,
+    last_contacted: '',
+    data_source: biz.data_source || 'provider',
+  });
+
   const saveAsLead = async (biz: BusinessResult, index: number) => {
+    if (savedIndices.has(index)) return;
     setSavingIndex(index);
     try {
-      await client.entities.leads.create({
-        data: {
-          business_name: biz.business_name,
-          category: biz.category,
-          location: biz.location,
-          country: biz.country,
-          website_url: biz.website_url || '',
-          website_score: biz.website_score,
-          social_score: biz.social_score,
-          has_website: biz.has_website,
-          social_platforms: '[]',
-          contact_email: biz.contact_email || '',
-          contact_phone: biz.contact_phone || '',
-          pipeline_stage: 'new_lead',
-          priority: biz.priority_score >= 70 ? 'high' : biz.priority_score >= 40 ? 'medium' : 'low',
-          notes_count: 0,
-          last_contacted: '',
-          data_source: biz.data_source || 'provider',
-        },
-      });
+      await client.entities.leads.create({ data: leadPayload(biz) });
+      setSavedIndices((prev) => new Set(prev).add(index));
       toast.success(`${biz.business_name} saved as lead!`);
     } catch (err) {
       toast.error('Failed to save lead');
     } finally {
       setSavingIndex(null);
+    }
+  };
+
+  /**
+   * Save every result not already saved.
+   *
+   * The search has already cost a credit by the time these are on screen, and
+   * they live only in component state — navigating away lost them. Saving one
+   * row at a time made a 25-result search 25 clicks, so in practice the work
+   * paid for was routinely thrown away.
+   *
+   * Failures are counted rather than aborting the batch: one bad row should
+   * not discard the other twenty-four.
+   */
+  const saveAllResults = async () => {
+    const pending = results
+      .map((biz, idx) => ({ biz, idx }))
+      .filter(({ idx }) => !savedIndices.has(idx));
+    if (!pending.length) return;
+
+    setSavingAll(true);
+    const saved = new Set(savedIndices);
+    let failed = 0;
+
+    for (const { biz, idx } of pending) {
+      try {
+        await client.entities.leads.create({ data: leadPayload(biz) });
+        saved.add(idx);
+      } catch {
+        failed += 1;
+      }
+    }
+
+    setSavedIndices(saved);
+    setSavingAll(false);
+
+    const succeeded = pending.length - failed;
+    if (failed === 0) {
+      toast.success(`Saved ${succeeded} lead${succeeded === 1 ? '' : 's'} to your pipeline`);
+    } else if (succeeded === 0) {
+      toast.error(`Could not save ${failed} lead${failed === 1 ? '' : 's'}`);
+    } else {
+      toast.warning(`Saved ${succeeded}, but ${failed} failed`);
     }
   };
 
@@ -426,6 +478,18 @@ export default function AppDiscover() {
                 <span className="font-medium text-slate-900">{results.length}</span> businesses found · sorted by Priority Score
               </p>
               <div className="flex items-center gap-2">
+                {results.length > savedIndices.size && (
+                  <Button
+                    size="sm"
+                    onClick={saveAllResults}
+                    disabled={savingAll}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer"
+                  >
+                    {savingAll
+                      ? `Saving ${results.length - savedIndices.size}...`
+                      : `Save all ${results.length - savedIndices.size} to pipeline`}
+                  </Button>
+                )}
                 <Badge variant="outline" className="text-xs border-green-200 text-green-700 bg-green-50">
                   Source: MapBox Places
                 </Badge>
@@ -477,11 +541,19 @@ export default function AppDiscover() {
                       <Button
                         size="sm"
                         onClick={() => saveAsLead(biz, idx)}
-                        disabled={savingIndex === idx}
-                        className="bg-indigo-600 hover:bg-indigo-700 gap-1"
+                        disabled={savingIndex === idx || savingAll || savedIndices.has(idx)}
+                        className={
+                          savedIndices.has(idx)
+                            ? 'bg-green-600 hover:bg-green-600 gap-1 cursor-default'
+                            : 'bg-indigo-600 hover:bg-indigo-700 gap-1 cursor-pointer'
+                        }
                       >
                         <Save className="h-3.5 w-3.5" />
-                        {savingIndex === idx ? 'Saving...' : 'Save'}
+                        {savedIndices.has(idx)
+                          ? 'Saved'
+                          : savingIndex === idx
+                            ? 'Saving...'
+                            : 'Save'}
                       </Button>
                       <Sheet>
                         <SheetTrigger asChild>
