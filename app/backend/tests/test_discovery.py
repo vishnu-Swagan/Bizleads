@@ -19,26 +19,61 @@ async def _seed_workspace(db_session, credits_used=0):
     return workspace
 
 
+FABRICATION_FUNCTIONS = ("generate_search_results", "discover_businesses", "extract_json_block")
+
+
+def test_the_fabrication_path_does_not_exist():
+    """Discovery must have no way to invent a business.
+
+    These functions asked a language model to produce businesses matching a
+    search and returned them as leads: plausible names, plausible websites,
+    none of them real. They are deleted, not merely uncalled — dead code that
+    fabricates leads is an invitation to call it.
+
+    Asserts against the source files, not runtime attributes: the autouse
+    fixture below installs tripwires under these same names, so `hasattr`
+    would report the tripwire and pass no matter what the code says.
+    """
+    import ast
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parent.parent
+    for module in ("services/business_search.py", "routers/discover.py"):
+        tree = ast.parse((backend / module).read_text())
+        defined = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        imported = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        for name in FABRICATION_FUNCTIONS:
+            assert name not in defined | imported, (
+                f"{module} defines or imports {name}. Discovery must return "
+                f"only businesses a licensed provider actually returned."
+            )
+
+
 @pytest.fixture(autouse=True)
 def _forbid_ai_discovery(monkeypatch):
-    """Any call to the AI generator during discovery is a test failure.
+    """Fail loudly if a fabrication function is reintroduced and then called.
 
-    Patched in two places on purpose, not redundantly. `business_search` is the
-    source module; `discover` is where a future regression would actually land.
-    A direct `from services.business_search import generate_search_results` in
-    discover.py (the same import style already used for is_mapbox_configured /
-    search_places) binds that name into discover's namespace at import time, so
-    patching only business_search.generate_search_results would not intercept
-    a call made via discover.generate_search_results. Neither discover.*
-    target exists today (raising=False is correct for both) - the point is to
-    pre-empt a reintroduced import, not to patch something currently present.
+    The module-level functions are gone, so there is nothing left to patch.
+    This installs tripwires under the names a regression would most likely
+    reuse: `discover` is where a reintroduced
+    `from services.business_search import generate_search_results` would bind
+    the name, which patching the source module alone would not intercept.
     """
     async def _explode(*args, **kwargs):
         raise AssertionError("AI fabrication path was invoked")
 
-    monkeypatch.setattr(business_search, "generate_search_results", _explode)
-    monkeypatch.setattr(discover, "discover_businesses", _explode, raising=False)
-    monkeypatch.setattr(discover, "generate_search_results", _explode, raising=False)
+    for name in FABRICATION_FUNCTIONS:
+        monkeypatch.setattr(business_search, name, _explode, raising=False)
+        monkeypatch.setattr(discover, name, _explode, raising=False)
 
 
 async def test_unconfigured_provider_returns_setup_state(user_a_client, db_session, monkeypatch):

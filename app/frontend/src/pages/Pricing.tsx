@@ -17,10 +17,9 @@ const plans = [
     features: [
       '300 monthly discovery credits',
       '1 team seat',
-      'Full 6-score intelligence',
+      'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
       'Lead pipeline & CRM',
-      'Basic analytics',
-      'CSV export',
+      'Analytics dashboard',
       'Email support',
     ],
     popular: false,
@@ -36,11 +35,9 @@ const plans = [
     features: [
       '1,500 monthly discovery credits',
       '3 team seats',
-      'Saved search monitoring',
-      'Advanced funnel analytics',
-      'White-label Proof Rooms',
-      'Integrations & API',
-      'Priority processing',
+      'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
+      'Lead pipeline & CRM',
+      'Analytics dashboard',
       'Priority support',
     ],
     popular: true,
@@ -56,12 +53,10 @@ const plans = [
     features: [
       '5,000 monthly discovery credits',
       '10 team seats',
-      'Lead reservations',
-      'Score calibration analytics',
-      'CRM/API access',
-      'Custom integrations',
+      'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
+      'Lead pipeline & CRM',
+      'Analytics dashboard',
       'Dedicated support',
-      'Priority job processing',
     ],
     popular: false,
   },
@@ -108,7 +103,7 @@ export default function Pricing() {
               🚀 Free Trial: 7 days, 25 credits, full scoring — no card required
             </p>
             <p className="text-sm text-indigo-700 mt-1">
-              Limited saves, no bulk export, watermarked Proof Rooms during trial
+              25 discovery credits, 1 seat, and the full toolset. No card required.
             </p>
           </div>
 

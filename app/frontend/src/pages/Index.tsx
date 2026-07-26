@@ -140,9 +140,9 @@ export default function Index() {
           <div className="grid gap-8 md:grid-cols-4">
             {[
               { step: '1', title: 'Discover', desc: 'Search licensed business data by location and category. Real businesses only — never generated.' },
-              { step: '2', title: 'Qualify', desc: 'Deep audit reveals the exact digital gaps, timing signals, and buyability evidence for each prospect.' },
-              { step: '3', title: 'Prove', desc: 'Generate a Revenue Gap Twin and shareable Proof Room showing the prospect exactly why they need you now.' },
-              { step: '4', title: 'Close', desc: 'Evidence-based outreach with personalized pitches. Track outcomes and calibrate your scoring over time.' },
+              { step: '2', title: 'Qualify', desc: 'We fetch the prospect\'s site and measure it: HTTPS, mobile viewport, page title, meta description, structured data, tap-to-call. Every gap is evidence you can quote.' },
+              { step: '3', title: 'Prioritise', desc: 'Prospects rank by measured need. Anything not yet measured stays marked unknown — never guessed at.' },
+              { step: '4', title: 'Work the pipeline', desc: 'Save prospects to your CRM, move them through stages, and track which evidence actually wins the work.' },
             ].map((item) => (
               <div key={item.step} className="text-center">
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-600 text-white font-bold text-sm mb-4">

@@ -112,6 +112,6 @@ If step 5 returns "No discovery provider connected", `MAPBOX_ACCESS_TOKEN` is mi
 
 **Do not enable Stripe.** There is still no webhook, so a customer who cancels keeps access indefinitely. The code path exists and will work if you set `STRIPE_SECRET_KEY` — that is the risk.
 
-**Do not set `SEED_MOCK_DATA`.** It seeds eight fabricated sample leads into the database.
+Lead fabrication is structurally impossible: the mock-data seeder and the AI business generator were both deleted, and a test asserts they stay deleted. Every lead comes from a licensed provider.
 
 See `docs/HANDOFF-stop-the-bleeding.md` for everything else still outstanding.

@@ -14,7 +14,7 @@ Backend: 97 tests passing. Frontend: builds and typechecks clean apart from one 
 |---|---|---|
 | 1 | **`ALLOWED_ORIGINS` must contain the production frontend origin**, comma-separated. | The wide-open CORS policy is gone. If this is unset or wrong, the app breaks entirely in production. A bare `*` is now rejected with a logged warning, because `*` plus `allow_credentials=True` would re-open the original hole. |
 | 2 | **Run the Alembic migration against real Postgres**: `alembic upgrade head && alembic downgrade -1 && alembic upgrade head`. | Migration `c7d1e2f3a4b5` (adds `leads.data_source`) has **never been executed**. No Postgres was reachable during this work, and a SQLite run was deliberately not substituted — SQLite's `ALTER TABLE` differs materially. The test suite builds tables via `create_all`, so it does not exercise the migration. |
-| 3 | **`SEED_MOCK_DATA` must remain unset.** | Gated in both `main.py` and `lambda_handler.py`. Setting it seeds eight fabricated sample leads. |
+| 3 | ~~`SEED_MOCK_DATA` must remain unset.~~ **Resolved.** | The seeder and its eight fabricated leads were deleted, along with the AI business generator. `test_the_fabrication_path_does_not_exist` fails if either returns. |
 | 4 | **`ENVIRONMENT` must not be `dev`.** | `main.py`'s exception handler returns full stack traces when it is. |
 | 5 | **`MAPBOX_ACCESS_TOKEN` must be set**, or Discover legitimately returns its setup state for every search. | This is now correct behaviour, not a bug — see §2. |
 

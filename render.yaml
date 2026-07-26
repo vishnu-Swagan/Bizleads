@@ -60,7 +60,7 @@ services:
       # it is.
       - key: ENVIRONMENT
         value: production
-      # Deliberately absent: SEED_MOCK_DATA. Setting it true would seed eight
-      # fabricated sample leads into the database.
+      # SEED_MOCK_DATA is gone: the seeding code and its eight fabricated
+      # sample leads were deleted outright, so there is no variable to set.
       - key: PYTHON_VERSION
         value: "3.13"

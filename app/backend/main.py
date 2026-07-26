@@ -25,7 +25,6 @@ from utils.logging_utils import cleanup_old_log_files
 
 # MODULE_IMPORTS_START
 from services.database import initialize_database, close_database
-from services.mock_data import initialize_mock_data
 from services.auth import initialize_admin_user
 # MODULE_IMPORTS_END
 
@@ -79,11 +78,6 @@ async def lifespan(app: FastAPI):
 
     # MODULE_STARTUP_START
     await initialize_database()
-    if os.environ.get("SEED_MOCK_DATA", "").lower() in ("true", "1", "yes"):
-        logger.info("SEED_MOCK_DATA is set; loading sample records")
-        await initialize_mock_data()
-    else:
-        logger.info("Mock data seeding disabled (set SEED_MOCK_DATA=true to enable)")
     await initialize_admin_user()
     # MODULE_STARTUP_END
 
