@@ -73,6 +73,29 @@ CATEGORY_MAP: Dict[str, str] = {
     "Tattoo Studio": "tattoo_parlour",
     "Music School": "music_school",
     "Driving School": "driving_school",
+
+    # Trades. MapBox has no canonical category for plumber, electrician, HVAC
+    # or tyre fitter — these are rarely storefront POIs, so its taxonomy groups
+    # them under home_repair. Verified to return real businesses: a Manchester
+    # home_repair search returned 15, only 8 with a website on record, the
+    # highest gap rate of any category tested.
+    #
+    # Without these, the dropdown offered ten categories that fell through to
+    # fuzzy text search, matched street names, filtered them out as non-POIs,
+    # and reported "no businesses found" every time.
+    "Plumber": "home_repair",
+    "Electrician": "home_repair",
+    "HVAC": "home_repair",
+    "Landscaping": "landscaping",
+    "Auto Repair": "auto_repair",
+    "Tire Shop": "auto_repair",
+    "Gym & Fitness": "fitness_center",
+    "Physiotherapy": "physiotherapist",
+    "Accountant": "tax_advisor",
+    "Accounting": "tax_advisor",
+    "Daycare": "childcare",
+    "Tutoring": "school",
+    "Education": "school",
 }
 
 COUNTRY_CODES: Dict[str, str] = {
