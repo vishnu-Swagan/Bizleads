@@ -88,11 +88,20 @@ async def lifespan(app: FastAPI):
     # MODULE_SHUTDOWN_END
 
 
+# Interactive API docs are a development tool. In production they served a
+# browsable map of all 70 endpoints — every path, request schema and field
+# name — to anyone who asked. The endpoints are authenticated, so this was not
+# a breach, but there is no reason to publish the blueprint.
+_docs_enabled = os.environ.get("ENVIRONMENT", "").lower() != "production"
+
 app = FastAPI(
-    title="FastAPI Modular Template",
-    description="A best-practice FastAPI template with modular architecture",
+    title="BizLeads API",
+    description="Website opportunity intelligence for agencies and studios.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 
