@@ -14,9 +14,18 @@ class Leads(Base):
     location = Column(String, nullable=False)
     country = Column(String, nullable=False)
     website_url = Column(String, nullable=True, default='', server_default='')
-    website_score = Column(Integer, nullable=True, default=0, server_default='0')
-    social_score = Column(Integer, nullable=True, default=0, server_default='0')
-    has_website = Column(Boolean, nullable=True, default=False, server_default='false')
+    # No defaults on these three, deliberately.
+    #
+    # A SQLAlchemy column default fires whenever the value is None at INSERT,
+    # so `website_score=None` was silently stored as 0 and `has_website=None`
+    # as False. That turned every unmeasured lead into one confirmed to have
+    # no website and scoring zero — a fabricated verdict, and the exact defect
+    # the scoring model exists to avoid.
+    #
+    # NULL means not measured. Only the qualification pass may set a value.
+    website_score = Column(Integer, nullable=True)
+    social_score = Column(Integer, nullable=True)
+    has_website = Column(Boolean, nullable=True)
     social_platforms = Column(String, nullable=True, default='[]', server_default='[]')
     contact_email = Column(String, nullable=True, default='', server_default='')
     contact_phone = Column(String, nullable=True, default='', server_default='')

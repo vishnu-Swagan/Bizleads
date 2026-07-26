@@ -19,6 +19,8 @@ from models.search_jobs import Search_jobs
 from services.scoring import build_score_breakdown
 from services.mapbox_places import is_mapbox_configured, search_places
 from services.pagespeed import is_pagespeed_configured
+from services.qualification import qualify_website
+from services.leads import LeadsService
 
 logger = logging.getLogger(__name__)
 
@@ -303,4 +305,138 @@ async def get_discovery_filters():
             {"value": "quick", "label": "Quick Discovery (1 credit)", "description": "Entity resolution and basic scoring"},
             {"value": "deep", "label": "Deep Analysis (1 credit)", "description": "Currently identical to Quick; website audits are not yet wired up"},
         ],
+    }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 2 — qualification
+#
+# Discovery (Pass 1) returns identity but not web presence, so every fresh lead
+# is unranked: priority_score is None until something is actually measured.
+# This is what does the measuring, and it is the only path by which a lead can
+# acquire a definite has_website value.
+#
+# It costs a credit per lead because it does real work — a DNS lookup, an HTTP
+# fetch with SSRF guards, and optionally a PageSpeed audit.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Each lead qualified makes at least one outbound request. A generous batch
+# would let one call fan out into hundreds of fetches against third parties.
+MAX_QUALIFY_BATCH = 10
+CREDITS_PER_QUALIFICATION = 1
+
+
+class QualifyRequest(BaseModel):
+    lead_ids: list[int]
+
+
+@router.post("/qualify")
+async def qualify_leads(
+    data: QualifyRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Measure the web presence of saved leads and rank them.
+
+    Only leads belonging to the caller are touched; unknown ids are reported
+    back rather than silently ignored, so a caller can tell the difference
+    between "not yours" and "measured".
+    """
+    if not data.lead_ids:
+        raise HTTPException(status_code=400, detail="No lead_ids provided")
+
+    if len(data.lead_ids) > MAX_QUALIFY_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Qualify at most {MAX_QUALIFY_BATCH} leads per request "
+                   f"({len(data.lead_ids)} requested)",
+        )
+
+    workspace = await ensure_workspace_for_user(current_user, db)
+    credits_remaining = workspace.monthly_credits - workspace.credits_used
+    cost = CREDITS_PER_QUALIFICATION * len(data.lead_ids)
+
+    if credits_remaining < cost:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "insufficient_credits",
+                "message": f"Qualifying {len(data.lead_ids)} lead(s) requires {cost} credit(s). "
+                           f"You have {credits_remaining} remaining.",
+                "credits_remaining": credits_remaining,
+                "credits_required": cost,
+                "upgrade_url": "/app/settings/billing",
+            },
+        )
+
+    service = LeadsService(db)
+    results = []
+    not_found = []
+    charged = 0
+
+    for lead_id in data.lead_ids:
+        lead = await service.get_by_id(lead_id, user_id=str(current_user.id))
+        if lead is None:
+            # 404-equivalent per lead: do not confirm whether the row exists
+            # for someone else.
+            not_found.append(lead_id)
+            continue
+
+        measurement = await qualify_website(lead.website_url)
+        charged += CREDITS_PER_QUALIFICATION
+
+        scored = build_score_breakdown(
+            {
+                "has_website": measurement["has_website"],
+                "website_score": measurement["website_score"],
+                "social_score": lead.social_score,
+                "contact_email": lead.contact_email or None,
+                "contact_phone": lead.contact_phone or None,
+                "data_source": lead.data_source,
+            }
+        )
+
+        # Persist only what was measured. None means unmeasured and is stored
+        # as NULL — writing 0 or false here would assert a verdict nobody
+        # established, which is the defect this whole pass exists to avoid.
+        update: dict = {
+            "has_website": measurement["has_website"],
+            "website_score": measurement["website_score"],
+        }
+        if measurement["website_url"]:
+            # The URL after redirects — what was actually measured.
+            update["website_url"] = measurement["website_url"]
+
+        priority = scored["priority_score"]
+        if priority is not None:
+            update["priority"] = (
+                "high" if priority >= 60 else "medium" if priority >= 35 else "low"
+            )
+
+        await service.update(lead_id, update, user_id=str(current_user.id))
+
+        results.append(
+            {
+                "lead_id": lead_id,
+                "business_name": lead.business_name,
+                "has_website": measurement["has_website"],
+                "website_url": measurement["website_url"],
+                "website_score": measurement["website_score"],
+                "website_state": measurement["website_state"],
+                "priority_score": priority,
+                "qualification_required": scored["qualification_required"],
+                "evidence_tier": measurement["evidence_tier"],
+                # The sellable part: specific, checkable problems with the site.
+                "findings": measurement["findings"],
+            }
+        )
+
+    workspace.credits_used += charged
+    await db.commit()
+
+    return {
+        "qualified": results,
+        "not_found": not_found,
+        "credits_charged": charged,
+        "credits_remaining": workspace.monthly_credits - workspace.credits_used,
+        "audit_available": is_pagespeed_configured(),
     }
