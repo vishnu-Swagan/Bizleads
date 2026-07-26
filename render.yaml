@@ -41,8 +41,11 @@ services:
       # MUST contain the deployed frontend origin or every browser call fails.
       # A bare "*" is rejected at startup: combined with credentials it would
       # reopen the any-origin hole this app was audited for.
+      # Must match the deployed frontend origin EXACTLY. If it does not, the
+      # site loads, looks fine, and every API call fails CORS — while curl
+      # against the API still returns healthy, which makes it hard to spot.
       - key: ALLOWED_ORIGINS
-        value: https://project-h0zzq.vercel.app
+        value: https://bizleads-five.vercel.app
 
       # --- Providers ---
       # Use a PUBLIC pk. token restricted by URL, never an sk. secret token.
