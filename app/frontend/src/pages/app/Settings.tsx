@@ -35,8 +35,21 @@ export default function AppSettings() {
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<{ mapbox_connected: boolean; pagespeed_connected: boolean } | null>(null);
 
   const activeTab = location.pathname.includes('billing') ? 'billing' : 'workspace';
+
+  useEffect(() => {
+    // Ask the API which providers are actually configured rather than
+    // asserting it in the markup.
+    client.apiCall
+      .invoke({ url: '/api/v1/discover/filters', method: 'GET', data: {} })
+      .then((res) => setProviderStatus({
+        mapbox_connected: !!res.data?.mapbox_connected,
+        pagespeed_connected: !!res.data?.pagespeed_connected,
+      }))
+      .catch(() => setProviderStatus({ mapbox_connected: false, pagespeed_connected: false }));
+  }, []);
 
   useEffect(() => {
     if (user) fetchUsage();
@@ -162,28 +175,53 @@ export default function AppSettings() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
+                  {/* Status comes from the API, never a hardcoded value. This
+                      block previously rendered 'Not Connected' unconditionally,
+                      so a correctly configured provider still read as missing. */}
                   {[
-                    { name: 'MapBox Places API', desc: 'Live business discovery', status: 'not_configured' },
-                    { name: 'PageSpeed Insights', desc: 'Website performance audits', status: 'not_configured' },
-                    { name: 'Email Sender (SMTP/Gmail)', desc: 'Outreach delivery', status: 'not_configured' },
+                    {
+                      name: 'MapBox Places API',
+                      desc: 'Live business discovery',
+                      connected: providerStatus?.mapbox_connected ?? null,
+                      note: 'Set MAPBOX_ACCESS_TOKEN on the API service',
+                    },
+                    {
+                      name: 'PageSpeed Insights',
+                      desc: 'Website performance audits — optional',
+                      connected: providerStatus?.pagespeed_connected ?? null,
+                      note: 'Optional. Without it, site quality is scored from the page we already fetch.',
+                    },
                   ].map((intg) => (
                     <div key={intg.name} className="flex items-center justify-between p-3 rounded-lg border border-slate-200">
                       <div className="flex items-center gap-3">
-                        <Plug className="h-4 w-4 text-slate-400" />
+                        <Plug className={cn('h-4 w-4', intg.connected ? 'text-green-600' : 'text-slate-400')} />
                         <div>
                           <p className="text-sm font-medium text-slate-700">{intg.name}</p>
-                          <p className="text-xs text-slate-500">{intg.desc}</p>
+                          <p className="text-xs text-slate-500">
+                            {intg.connected ? intg.desc : `${intg.desc} · ${intg.note}`}
+                          </p>
                         </div>
                       </div>
-                      <Badge variant="outline" className="text-xs border-slate-200 text-slate-500">
-                        Not Connected
-                      </Badge>
+                      {intg.connected === null ? (
+                        <Badge variant="outline" className="text-xs border-slate-200 text-slate-400">
+                          Checking…
+                        </Badge>
+                      ) : intg.connected ? (
+                        <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
+                          Connected
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">
+                          Not Connected
+                        </Badge>
+                      )}
                     </div>
                   ))}
                 </div>
                 <p className="text-xs text-slate-500 mt-4">
-                  Discovery requires a connected provider. Add a MapBox access token to run
-                  searches — without one, Discover returns no results.
+                  {providerStatus?.mapbox_connected
+                    ? 'Discovery is live. Searches return real businesses from the connected provider.'
+                    : 'Discovery requires a connected provider. Without one, Discover returns no results rather than inventing businesses.'}
                 </p>
               </CardContent>
             </Card>
