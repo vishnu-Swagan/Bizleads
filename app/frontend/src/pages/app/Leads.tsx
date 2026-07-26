@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { client } from '@/lib/api';
-import { Search, Download, ChevronRight, AlertCircle } from 'lucide-react';
+import { Search, Download, ChevronRight, AlertCircle, Gauge, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -87,6 +87,65 @@ export default function AppLeads() {
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [qualifying, setQualifying] = useState<Set<number>>(new Set());
+
+  /** A lead whose web presence has never been measured. */
+  const isUnmeasured = (l: Lead) => l.website_score === null && l.has_website === null;
+
+  /**
+   * Pass 2. Measures the site behind each lead and ranks it.
+   *
+   * Costs one credit per lead because it does real work — a DNS lookup, an
+   * HTTP fetch, and optionally a Lighthouse audit. The endpoint caps a batch
+   * at 10, so the bulk action is chunked rather than sent as one large call.
+   */
+  const qualify = async (ids: number[]) => {
+    if (!ids.length) return;
+    setQualifying((prev) => new Set([...prev, ...ids]));
+
+    try {
+      const batches: number[][] = [];
+      for (let i = 0; i < ids.length; i += 10) batches.push(ids.slice(i, i + 10));
+
+      let measured = 0;
+      let topFinding: string | null = null;
+
+      for (const batch of batches) {
+        const res = await client.apiCall.invoke({
+          url: '/api/v1/discover/qualify',
+          method: 'POST',
+          data: { lead_ids: batch },
+          options: { timeout: 120000 },
+        });
+        const qualified = res.data?.qualified ?? [];
+        measured += qualified.length;
+        for (const q of qualified) {
+          if (!topFinding && q.findings?.length) {
+            topFinding = `${q.business_name}: ${q.findings[0].label}`;
+          }
+        }
+      }
+
+      await fetchLeads();
+      toast.success(
+        `Measured ${measured} lead${measured === 1 ? '' : 's'}` +
+          (topFinding ? ` · ${topFinding}` : ''),
+      );
+    } catch (err: any) {
+      const detail = err?.data?.detail;
+      if (detail?.error === 'insufficient_credits') {
+        toast.error(detail.message);
+      } else {
+        toast.error(detail?.message ?? err?.message ?? 'Qualification failed');
+      }
+    } finally {
+      setQualifying((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (user) fetchLeads();
@@ -131,6 +190,23 @@ export default function AppLeads() {
             <h1 className="text-2xl font-bold text-slate-900">Leads</h1>
             <p className="text-sm text-slate-500">{leads.length} total leads in your workspace</p>
           </div>
+          {leads.filter(isUnmeasured).length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={qualifying.size > 0}
+              onClick={() => qualify(leads.filter(isUnmeasured).map((l) => l.id))}
+              className="gap-2 border-indigo-200 text-indigo-700 cursor-pointer"
+              title="Measure every lead that has never been checked (1 credit each)"
+            >
+              {qualifying.size > 0 ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Gauge className="h-4 w-4" />
+              )}
+              Qualify {leads.filter(isUnmeasured).length} unmeasured
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={exportCSV} className="gap-2 border-slate-200">
             <Download className="h-4 w-4" />
             Export CSV
@@ -240,7 +316,32 @@ export default function AppLeads() {
                       })()}
                     </TableCell>
                     <TableCell className="text-sm text-slate-600">
-                      {lead.has_website ? `${lead.website_score}/100` : 'None'}
+                      {/* Three distinct states. Collapsing them would report an
+                          unmeasured lead as one confirmed to have no website. */}
+                      {lead.website_score !== null && lead.website_score !== undefined ? (
+                        `${lead.website_score}/100`
+                      ) : lead.has_website === false ? (
+                        <span className="text-slate-700">No website</span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={qualifying.has(lead.id)}
+                          className="h-7 border-slate-200 text-xs cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            qualify([lead.id]);
+                          }}
+                          title="Fetch the site and measure its quality (1 credit)"
+                        >
+                          {qualifying.has(lead.id) ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Gauge className="h-3 w-3 mr-1" />
+                          )}
+                          {qualifying.has(lead.id) ? 'Measuring…' : 'Qualify'}
+                        </Button>
+                      )}
                     </TableCell>
                     <TableCell>
                       <ChevronRight className="h-4 w-4 text-slate-400" />
