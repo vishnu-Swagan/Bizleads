@@ -99,6 +99,41 @@ services:
       - key: RESEND_FROM_EMAIL
         sync: false
 
+      # --- Stripe billing ---
+      # STRIPE_SECRET_KEY: sk_live_... (sk_test_... while testing)
+      # STRIPE_WEBHOOK_SECRET: whsec_..., shown when you add the endpoint at
+      #   https://dashboard.stripe.com/webhooks pointing to
+      #   https://bizleads.onrender.com/api/v1/payments/webhook
+      #
+      # The webhook secret is not optional for a subscription business. Without
+      # it the endpoint is disabled, and then: a customer who closes the tab
+      # after paying never gets activated, renewals never reset credits, and
+      # cancellations never revoke access.
+      #
+      # Subscribe the endpoint to at least:
+      #   checkout.session.completed, customer.subscription.created,
+      #   customer.subscription.updated, customer.subscription.deleted,
+      #   invoice.paid, invoice.payment_failed
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # --- Customer email credentials ---
+      # Each customer stores their OWN sending credentials, so nothing can be
+      # saved until this key exists. Encryption never falls back to plaintext:
+      # a fallback that "works" is how credentials end up unencrypted in
+      # production without anyone noticing.
+      #
+      # Generate with:
+      #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      #
+      # ROTATING THIS KEY INVALIDATES EVERY STORED CREDENTIAL. Customers would
+      # each have to re-enter their password or API key. Set it once and keep
+      # it safe.
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        sync: false
+
       # --- Scheduled automations ---
       # A long random value, e.g. `openssl rand -hex 32`. The SAME value must
       # be set as a GitHub repository secret named AUTOMATION_CRON_SECRET, so
