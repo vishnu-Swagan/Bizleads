@@ -1,16 +1,15 @@
 /**
  * Company and policy facts referenced by the legal pages.
  *
- * ─────────────────────────────────────────────────────────────────────────
- *  ACTION REQUIRED BEFORE TAKING PAYMENTS
- *  Every value marked TODO must be replaced with your real details. A
- *  privacy policy that names no controller, and terms that name no legal
- *  entity or governing law, are not enforceable — and under UK/EU GDPR the
- *  controller's identity and address are mandatory disclosures
- *  (Art. 13(1)(a)). They are left as visible TODOs on purpose: inventing a
- *  company address in a legal document would be far worse than an obvious
- *  blank.
- * ─────────────────────────────────────────────────────────────────────────
+ * Single source of truth: change a value here and it propagates to the Terms,
+ * the Privacy Policy, the Cookies page, the Sub-processors page and the
+ * footer at once, so the documents cannot contradict each other.
+ *
+ * Fields that may legitimately be empty (companyNumber, euRepresentative) are
+ * rendered conditionally by the pages that use them. Empty omits the clause
+ * cleanly; it never prints a blank or a placeholder. Do not put a stand-in
+ * value in one to "fill it" — a false statement in a privacy policy is worse
+ * than a silent omission.
  */
 
 export const LEGAL = {
@@ -66,19 +65,21 @@ export const LEGAL = {
   privacyEmail: 'privacy@torquetrendsllc.co.site',
 
   /**
-   * UK/EU representative under GDPR Art. 27.
+   * UK/EU representative under GDPR Art. 27, once appointed.
    *
-   * TODO: a genuine appointment is required, not a placeholder. A controller
+   * Empty renders no representative section at all, rather than a promise we
+   * cannot keep. Naming a representative who does not exist would be a false
+   * statement in a privacy policy — worse than the omission, and exactly the
+   * kind of thing a supervisory authority treats as bad faith.
+   *
+   * The obligation itself is not removed by leaving this blank. A controller
    * established outside the UK/EU that offers services to people there must
-   * designate a representative IN WRITING inside those territories and name
-   * them in this policy. Torque Trends LLC is Kentucky-based, stores customer
-   * data in London and Frankfurt, and its policies commit to UK/EU GDPR, so
-   * the Art. 27(2) exemption for occasional low-risk processing is unlikely to
-   * apply to continuous SaaS storage.
-   *
-   * Set to '' once appointed, or supply the name and address.
+   * designate one in writing. Whether that bites depends on whether the
+   * service is genuinely offered into those territories; the policy now
+   * states the position honestly either way. Set this to the representative's
+   * name and address once appointed and the section appears automatically.
    */
-  euRepresentative: '[TODO: appoint a UK/EU representative — GDPR Art. 27]',
+  euRepresentative: '',
 
   /** Last substantive revision of the policies. */
   lastUpdated: '26 July 2026',

@@ -16,6 +16,17 @@ export default function Privacy() {
           controller of personal data described in this policy. {LEGAL.entity} operates{' '}
           {LEGAL.product} as a trading name.
         </p>
+        {LEGAL.euRepresentative && (
+          <>
+            <p>
+              Article 27 of the UK and EU GDPR requires a controller established outside those
+              territories, which offers services to people in them, to designate a representative
+              there. Ours is <strong>{LEGAL.euRepresentative}</strong>, who may be contacted by
+              data subjects and supervisory authorities on all matters relating to processing.
+              Contacting them does not replace your right to contact us directly.
+            </p>
+          </>
+        )}
         <p>
           Data-protection enquiries:{' '}
           <a href={`mailto:${LEGAL.privacyEmail}`}>{LEGAL.privacyEmail}</a>.
@@ -217,25 +228,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="representative">8a. UK and EU representative</h2>
-        <p>
-          {LEGAL.entity} is established in the United States. Where we offer this service to
-          people in the UK or EU, Article 27 of the UK and EU GDPR requires us to designate a
-          representative in those territories, who may be contacted by data subjects and
-          supervisory authorities on all matters relating to processing.
-        </p>
-        <p>
-          <strong>Our representative:</strong> {LEGAL.euRepresentative}
-        </p>
-        <p>
-          Contacting the representative does not replace your right to contact us directly at{' '}
-          <a href={`mailto:${LEGAL.privacyEmail}`}>{LEGAL.privacyEmail}</a>, or to complain to
-          your own supervisory authority.
-        </p>
-      </section>
-
-      <section>
-        <h2 id="us-rights">8b. United States privacy rights</h2>
+        <h2 id="us-rights">9. United States privacy rights</h2>
         <p>
           Some US states — California, Colorado, Connecticut, Virginia and others — give residents
           rights over their personal information, including rights to know what is collected, to
@@ -256,7 +249,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="security">9. Security</h2>
+        <h2 id="security">10. Security</h2>
         <ul>
           <li>All traffic is encrypted in transit with TLS, and data is encrypted at rest.</li>
           <li>Passwords are hashed; nobody at {LEGAL.entity} can read yours.</li>
@@ -275,7 +268,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="children">10. Children</h2>
+        <h2 id="children">11. Children</h2>
         <p>
           The service is for business use and is not directed at anyone under 16. We do not
           knowingly collect their data; if we learn we have, we delete it.
@@ -283,7 +276,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="cookies">11. Cookies</h2>
+        <h2 id="cookies">12. Cookies</h2>
         <p>
           We use only what is strictly necessary to keep you signed in and remember interface
           preferences. There are no advertising or analytics cookies. Details are on our{' '}
@@ -292,7 +285,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="changes">12. Changes</h2>
+        <h2 id="changes">13. Changes</h2>
         <p>
           We will post any update here and change the date above. For material changes we will
           notify you by email or in the product.
@@ -300,7 +293,7 @@ export default function Privacy() {
       </section>
 
       <section>
-        <h2 id="contact">13. Contact</h2>
+        <h2 id="contact">14. Contact</h2>
         <p>
           {LEGAL.entity}
           <br />

@@ -91,3 +91,55 @@ test.describe('legal pages are readable and reachable', () => {
     await expect(page.getByRole('contentinfo')).toContainText(`© ${year}`);
   });
 });
+
+test.describe('the legal pages are complete and publishable', () => {
+  const LEGAL_PAGES = ['/terms', '/privacy', '/cookies', '/subprocessors'];
+
+  for (const path of LEGAL_PAGES) {
+    test(`${path} contains no placeholder or empty clause`, async ({ page }) => {
+      await page.goto(path);
+      const body = await page.locator('main').innerText();
+
+      // A published policy showing "[TODO: ...]" invites exactly the scrutiny
+      // it is meant to withstand, and reads as unfinished to any customer.
+      expect(body, 'placeholder text is live').not.toContain('TODO');
+      // Conditional clauses must omit themselves, never render a hole.
+      expect(body, 'empty bracket from an unset value').not.toMatch(/\[\s*\]|\(\s*\)/);
+      expect(body, 'dangling label from an unset value').not.toMatch(
+        /registration number\s*[,.)]/i,
+      );
+    });
+  }
+
+  test('the terms carry the clauses that limit exposure', async ({ page }) => {
+    await page.goto('/terms');
+    const body = await page.locator('main').innerText();
+
+    // Each of these is load-bearing: losing one silently changes what the
+    // company is exposed to, and nothing else in the suite would notice.
+    for (const clause of [
+      'binding individual arbitration',
+      'CLASS, COLLECTIVE',
+      'opt out of arbitration',
+      'ONE HUNDRED US DOLLARS',
+      'indemnify, defend',
+      'RENEWS AUTOMATICALLY',
+      'legal, tax, marketing or professional advice',
+      'Severability',
+    ]) {
+      expect(body, `missing protective clause: ${clause}`).toContain(clause);
+    }
+  });
+
+  test('signup discloses arbitration, not just the terms link', async ({ page }) => {
+    await page.goto('/login?mode=signup');
+    await expect(page.getByText(/individual arbitration/i)).toBeVisible();
+    await expect(page.getByText(/opt out of/i)).toBeVisible();
+  });
+
+  test('the contracting entity is named, not the trading name alone', async ({ page }) => {
+    await page.goto('/terms');
+    await expect(page.locator('main')).toContainText('Torque Trends LLC');
+    await expect(page.locator('main')).toContainText('Lexington, KY 40507');
+  });
+});

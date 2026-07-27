@@ -175,7 +175,9 @@ export default function Login() {
                   >
                     Privacy Policy
                   </Link>
-                  .
+                  , including the agreement to resolve disputes by individual arbitration and
+                  the waiver of class actions in section 13, which you may opt out of within 30
+                  days.
                 </p>
               )}
             </form>
