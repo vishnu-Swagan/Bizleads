@@ -17,8 +17,16 @@ export const LEGAL = {
   /** Trading name shown throughout the product. */
   product: 'BizLeads',
 
-  /** TODO: registered company name, e.g. "Swagan Digital Ltd". */
-  entity: '[TODO: registered company name]',
+  /**
+   * Registered company name.
+   *
+   * If the company is incorporated, this must match the register exactly,
+   * including any suffix ("BizLeads Ltd", "BizLeads Limited"). A contract
+   * naming an entity that does not exist on the register is difficult to
+   * enforce. If you trade as a sole trader, the contracting party is you
+   * personally — "Vishnu Muthusamy, trading as BizLeads".
+   */
+  entity: 'BizLeads',
 
   /** TODO: company registration number, if incorporated. */
   companyNumber: '[TODO: company number]',
