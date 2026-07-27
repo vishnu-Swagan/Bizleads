@@ -1,6 +1,6 @@
 from core.database import Base
 from datetime import datetime
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 
 class Leads(Base):
@@ -36,5 +36,22 @@ class Leads(Base):
     # Provenance. NULL means unknown — deliberately not defaulted, because an
     # unknown origin must stay distinguishable from a verified one.
     data_source = Column(String, nullable=True)
+    # Website qualification findings, JSON-encoded (a list of finding dicts —
+    # see services/site_signals.py). No default, deliberately, same reasoning
+    # as website_score above:
+    #
+    #   NULL   -> never qualified. Nobody has looked at this lead's site.
+    #   "[]"   -> qualified, and the analysis found nothing wrong. A clean
+    #             bill of health is itself a real, asserted result.
+    #
+    # Collapsing these into one value (e.g. always writing "[]") would turn
+    # "we haven't checked" into "we checked and it's fine" — the same
+    # fabricated-verdict defect the website_score/has_website columns above
+    # exist to avoid. Only the qualification pass may set this.
+    findings = Column(Text, nullable=True)
+    # ISO timestamp of the last qualification pass. NULL means never
+    # qualified, mirroring `findings` — the two are set together and read
+    # together as "was this lead ever measured, and when".
+    qualified_at = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

@@ -95,8 +95,13 @@ export default function Pricing() {
               Simple, transparent pricing
             </h1>
             <p className="mt-4 text-lg text-slate-600 max-w-2xl mx-auto">
-              Start with a free 7-day trial. No credit card required. 
+              Start with a free 7-day trial. No credit card required.
               All plans include the full 6-score intelligence system.
+            </p>
+            <p className="mt-3 text-sm text-slate-500 max-w-2xl mx-auto">
+              All prices are in US dollars (USD). If you're outside the United States, your bank
+              or card network will convert the charge to your local currency at their exchange
+              rate, and any applicable tax is calculated at checkout.
             </p>
           </div>
 
@@ -131,9 +136,10 @@ export default function Pricing() {
                 </div>
                 <div className="mb-6">
                   <span className="text-4xl font-bold text-slate-900">${plan.price}</span>
+                  <span className="text-slate-500 ml-1">USD</span>
                   <span className="text-slate-500">/month</span>
                   <p className="text-xs text-slate-500 mt-1">
-                    or ${plan.annual}/year (save ~17%)
+                    or ${plan.annual} USD/year (save ~17%)
                   </p>
                 </div>
                 <div className="flex-1 mb-6">

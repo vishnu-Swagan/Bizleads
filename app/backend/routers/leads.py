@@ -38,6 +38,13 @@ class LeadsData(BaseModel):
     notes_count: Optional[int] = None
     last_contacted: Optional[str] = None
     data_source: Optional[str] = None
+    # JSON-encoded qualification findings and the ISO timestamp of the last
+    # qualification pass. Optional[str] (not Optional[str] = None with a bare
+    # `str` type) so an explicit null round-trips — see
+    # tests/test_save_lead_contract.py for the Pydantic v2 trap this avoids.
+    # NULL means never qualified; "[]" means qualified with nothing found.
+    findings: Optional[str] = None
+    qualified_at: Optional[str] = None
 
 
 class LeadsUpdateData(BaseModel):
@@ -80,6 +87,8 @@ class LeadsResponse(BaseModel):
     notes_count: Optional[int] = None
     last_contacted: Optional[str] = None
     data_source: Optional[str] = None
+    findings: Optional[str] = None
+    qualified_at: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

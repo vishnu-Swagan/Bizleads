@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -199,6 +199,17 @@ async def create_checkout(
             "payment_method_types": ["card"],
             "line_items": [{
                 "price_data": {
+                    # All plans are billed in USD; non-US customers are charged in USD
+                    # at their card network's exchange rate (disclosed on the Pricing
+                    # page). Stripe Tax (automatic_tax={"enabled": True}) is NOT enabled
+                    # here: it requires Stripe Tax to be configured in the Dashboard
+                    # (origin address, tax registrations, product tax codes) first.
+                    # Enabling it without that configuration would error out or silently
+                    # miscalculate tax on every checkout. To turn this on: configure
+                    # Stripe Tax in the Dashboard for Torque Trends LLC (Kentucky, US),
+                    # then set automatic_tax={"enabled": True} on the session and add
+                    # customer_update={"address": "auto"} / collect billing address so
+                    # Stripe can determine the customer's tax jurisdiction.
                     "currency": "usd",
                     "product_data": {
                         "name": f"BizLeads {plan['name']} Plan",
@@ -304,7 +315,7 @@ async def verify_payment(
     workspace.stripe_customer_id = session.customer or ""
     workspace.stripe_subscription_id = session.subscription or ""
     workspace.credits_used = 0
-    workspace.credits_reset_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    workspace.credits_reset_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
     db.add(Credit_ledger(
         workspace_id=workspace.id,

@@ -1,5 +1,5 @@
 from core.database import Base
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, Integer, String
 
 
@@ -12,5 +12,8 @@ class Workspace_members(Base):
     role = Column(String, nullable=True, default='member', server_default='member')
     invited_email = Column(String, nullable=True, default='', server_default='')
     status = Column(String, nullable=True, default='active', server_default='active')
-    created_at = Column(DateTime(timezone=True), default=datetime.now)
-    updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)
+    # Python-side default using tz-aware UTC (not server_default=func.now()) because
+    # this DB column has no DB-level default from a migration; adding server_default
+    # without a matching Alembic migration would risk NULL/NOT NULL failures on insert.
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

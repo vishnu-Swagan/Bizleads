@@ -13,6 +13,8 @@ from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
 from services.pagespeed import is_pagespeed_configured, audit_website, bulk_audit
 from services.email_sender import is_email_configured, send_email, send_bulk_emails, get_email_config_status
+from services.outreach_composer import compose_many
+from services.leads import LeadsService
 
 logger = logging.getLogger(__name__)
 
@@ -165,3 +167,70 @@ async def get_outreach_status(
             **get_email_config_status(),
         },
     }
+
+
+# --- Evidence-based drafting ---
+
+class ComposeRequest(BaseModel):
+    lead_ids: list[int]
+    sender_name: Optional[str] = None
+    sender_business: Optional[str] = None
+
+
+MAX_COMPOSE_PER_CALL = 50
+
+
+@router.post("/compose")
+async def compose_drafts(
+    data: ComposeRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Draft outreach for leads, written from their measured findings.
+
+    Costs no credits: the measurement was already paid for at qualification,
+    and this only re-reads what was stored. Charging again for rephrasing our
+    own data would be indefensible.
+
+    Leads that cannot honestly be written to are returned in `skipped` with a
+    reason, never silently dropped — an unqualified lead simply needs
+    qualifying, and telling the user that is more useful than a short list
+    with no explanation.
+    """
+    if not data.lead_ids:
+        raise HTTPException(status_code=400, detail="No leads selected")
+
+    if len(data.lead_ids) > MAX_COMPOSE_PER_CALL:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Compose at most {MAX_COMPOSE_PER_CALL} leads at a time.",
+        )
+
+    service = LeadsService(db)
+    leads: list[dict] = []
+    not_found: list[int] = []
+
+    for lead_id in data.lead_ids:
+        # Scoped to the caller: get_by_id filters by user_id, so one customer
+        # cannot draft from another's leads.
+        lead = await service.get_by_id(lead_id, user_id=str(current_user.id))
+        if lead is None:
+            not_found.append(lead_id)
+            continue
+        leads.append({
+            "id": lead.id,
+            "business_name": lead.business_name,
+            "website_url": lead.website_url,
+            "website_score": lead.website_score,
+            "contact_email": lead.contact_email,
+            "findings": lead.findings,
+        })
+
+    result = compose_many(
+        leads,
+        sender_name=(data.sender_name or "").strip(),
+        sender_business=(data.sender_business or "").strip(),
+    )
+    result["not_found"] = not_found
+    result["email_configured"] = is_email_configured()
+    return result

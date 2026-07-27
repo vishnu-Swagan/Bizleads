@@ -3,7 +3,7 @@ BizLeads Discovery Router - Job-based async search with credit metering
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -412,6 +412,15 @@ async def qualify_leads(
         if measurement["website_url"]:
             # The URL after redirects — what was actually measured.
             update["website_url"] = measurement["website_url"]
+
+        # findings/qualified_at follow the same rule: only persist them when
+        # a website_score was actually established. A None score means the
+        # measurement could not run (invalid/blocked/parked/unreachable), and
+        # writing "[]" there would assert "checked, found nothing wrong" for
+        # a lead nobody actually analysed.
+        if measurement["website_score"] is not None:
+            update["findings"] = json.dumps(measurement["findings"])
+            update["qualified_at"] = datetime.now(timezone.utc).isoformat()
 
         priority = scored["priority_score"]
         if priority is not None:
