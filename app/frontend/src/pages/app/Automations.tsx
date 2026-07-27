@@ -127,6 +127,7 @@ export default function AppAutomations() {
   const { user } = useAuth();
   const [status, setStatus] = useState<EmailStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [catchingUp, setCatchingUp] = useState(false);
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -174,11 +175,50 @@ export default function AppAutomations() {
     if (user) {
       void loadStatus();
       void loadLeads();
-      void loadAutomations();
-      void loadQueue();
       void loadFilters();
+      void loadAutomations().then(() => void catchUpDueAutomations());
+      void loadQueue();
     }
   }, [user]);
+
+  /**
+   * Run anything that has fallen due, whenever the page is opened.
+   *
+   * The hourly GitHub Actions trigger is the unattended path, but it needs a
+   * shared secret configured in two dashboards, and until that is done a
+   * schedule silently never fires — which makes the feature look broken when
+   * it is merely unconfigured.
+   *
+   * This closes that gap with no configuration at all: /run-due is
+   * authenticated as the signed-in user and scoped to their own automations,
+   * so simply opening the page catches up anything overdue. For a daily or
+   * weekly schedule that is usually enough on its own.
+   *
+   * Deliberately fire-and-forget. A run performs discovery and qualification
+   * and can take a minute; blocking the page on it would make Outreach feel
+   * broken. Failures are swallowed rather than shown — this is background
+   * catch-up the user did not ask for, and "Run now" reports errors properly.
+   */
+  const catchUpDueAutomations = async () => {
+    setCatchingUp(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/automations/run-due',
+        method: 'POST',
+        data: {},
+        options: { timeout: 180000 },
+      });
+      const ran = res.data?.results?.length ?? res.data?.ran ?? 0;
+      if (ran > 0) {
+        toast.success(`Caught up ${ran} scheduled automation${ran === 1 ? '' : 's'}`);
+        await Promise.all([loadAutomations(), loadQueue()]);
+      }
+    } catch {
+      // Silent on purpose: see above.
+    } finally {
+      setCatchingUp(false);
+    }
+  };
 
   const loadFilters = async () => {
     try {
@@ -669,8 +709,20 @@ export default function AppAutomations() {
                   Automations
                 </CardTitle>
                 <p className="mt-1 text-sm text-slate-500">
-                  Repeats a Discover search on a schedule, and can optionally qualify and draft outreach
-                  for what it finds.
+                  Repeats a Discover search on a schedule, and can optionally qualify and draft
+                  outreach for what it finds. Nothing is ever sent automatically — drafts wait
+                  in the approval queue below.
+                </p>
+                {/*
+                  Say plainly when scheduled work actually happens. A "Daily"
+                  badge with no explanation implies a server is watching the
+                  clock; on this stack, opening the page is what catches it up
+                  unless the hourly trigger is configured.
+                */}
+                <p className="mt-1 text-xs text-slate-400">
+                  {catchingUp
+                    ? 'Checking for anything due…'
+                    : 'Due automations run when you open this page. For unattended runs, see AUTOMATION_CRON_SECRET in DEPLOY.md.'}
                 </p>
               </div>
               <Button
