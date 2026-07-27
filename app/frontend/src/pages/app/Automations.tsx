@@ -63,6 +63,7 @@ interface Lead {
 }
 
 interface EmailStatus {
+  provider?: 'smtp' | 'resend';
   configured: boolean;
   host: string | null;
   port: number;
@@ -631,7 +632,7 @@ export default function AppAutomations() {
                 </Badge>
                 <span className="text-sm text-slate-600">
                   Sending as <strong className="text-slate-900">{status.from_email}</strong> via{' '}
-                  {status.host}:{status.port}
+                  {status.provider === 'resend' ? 'Resend' : `${status.host}:${status.port}`}
                 </span>
               </div>
             ) : (
@@ -665,6 +666,47 @@ export default function AppAutomations() {
 
                 {/* The single most common setup failure, answered inline. */}
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                  {status?.provider === 'resend' ? (
+                    <>
+                      <p className="font-medium text-slate-900">Using Resend</p>
+                      <ol className="mt-2 list-decimal space-y-1.5 pl-5">
+                        <li>
+                          Create an API key at{' '}
+                          <a
+                            href="https://resend.com/api-keys"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 underline underline-offset-2"
+                          >
+                            resend.com/api-keys
+                          </a>{' '}
+                          and set it as <code className="text-xs">RESEND_API_KEY</code>.
+                        </li>
+                        <li>
+                          Verify your sending domain at{' '}
+                          <a
+                            href="https://resend.com/domains"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 underline underline-offset-2"
+                          >
+                            resend.com/domains
+                          </a>
+                          . Until it is verified, Resend will only deliver to the address
+                          that owns the account.
+                        </li>
+                        <li>
+                          Set <code className="text-xs">RESEND_FROM_EMAIL</code> to an address
+                          on that domain.
+                        </li>
+                      </ol>
+                      <p className="mt-3 text-slate-600">
+                        Check Resend&rsquo;s acceptable use policy before sending cold outreach.
+                        Transactional providers generally prohibit unsolicited email.
+                      </p>
+                    </>
+                  ) : (
+                  <>
                   <p className="font-medium text-slate-900">Using Gmail?</p>
                   <ol className="mt-2 list-decimal space-y-1.5 pl-5">
                     <li>Turn on 2-Step Verification for the account.</li>
@@ -687,8 +729,11 @@ export default function AppAutomations() {
                   </ol>
                   <p className="mt-3 text-slate-600">
                     Gmail caps sending at roughly 500 a day and suspends accounts used for cold
-                    outreach. For real volume, use a transactional provider on your own domain.
+                    outreach. Setting <code className="text-xs">RESEND_API_KEY</code> switches
+                    delivery to Resend automatically.
                   </p>
+                  </>
+                  )}
                 </div>
 
                 <Button variant="outline" size="sm" onClick={loadStatus} className="cursor-pointer">

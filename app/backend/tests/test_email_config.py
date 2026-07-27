@@ -148,3 +148,101 @@ class TestAuthFailureDiagnosis:
 
         assert "App Password" not in message
         assert "smtp.mailgun.org" in message
+
+
+class TestProviderSelection:
+    """Which backend runs must follow configuration, not a separate flag.
+
+    A flag nobody remembers to set is how a pasted API key silently does
+    nothing while the old, broken backend keeps failing.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_resend(self, monkeypatch):
+        for var in ("RESEND_API_KEY", "RESEND_FROM_EMAIL", "EMAIL_PROVIDER"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_smtp_is_the_default(self):
+        assert email_sender.active_provider() == "smtp"
+
+    def test_a_resend_key_switches_provider_on_its_own(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        assert email_sender.active_provider() == "resend"
+
+    def test_an_explicit_override_wins(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
+        assert email_sender.active_provider() == "smtp"
+
+    def test_resend_falls_back_to_the_smtp_sender_address(self, monkeypatch):
+        """One less variable to set when migrating from SMTP."""
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        monkeypatch.setenv("SMTP_FROM_EMAIL", "hi@torquetrendsllc.co.site")
+        assert email_sender.is_email_configured() is True
+
+    def test_a_key_without_a_sender_is_not_configured(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        monkeypatch.delenv("SMTP_FROM_EMAIL", raising=False)
+        assert email_sender.is_email_configured() is False
+        assert "RESEND_FROM_EMAIL" in email_sender.get_email_config_status()["missing"]
+
+    def test_status_names_the_active_provider(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        monkeypatch.setenv("RESEND_FROM_EMAIL", "hi@torquetrendsllc.co.site")
+        status = email_sender.get_email_config_status()
+        assert status["provider"] == "resend"
+        assert status["configured"] is True
+
+    def test_the_api_key_never_leaves_the_server(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_super_secret_value")
+        monkeypatch.setenv("RESEND_FROM_EMAIL", "hi@torquetrendsllc.co.site")
+        assert "re_super_secret_value" not in str(email_sender.get_email_config_status())
+
+
+class TestResendErrors:
+    """Resend's own message names the unverified domain or bad key, so it is
+    surfaced rather than replaced with something vaguer."""
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+        monkeypatch.setenv("RESEND_FROM_EMAIL", "hi@torquetrendsllc.co.site")
+
+    async def _send_with(self, monkeypatch, status, body):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(status, json=body)
+
+        original = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        monkeypatch.setattr(
+            email_sender.httpx, "AsyncClient",
+            lambda *a, **k: original(*a, **{**k, "transport": transport}),
+        )
+        return await email_sender.send_email("owner@business.com", "Hi", "<p>Hi</p>")
+
+    @pytest.mark.asyncio
+    async def test_a_successful_send(self, monkeypatch):
+        result = await self._send_with(monkeypatch, 200, {"id": "abc"})
+        assert result["success"] is True
+        assert result["provider"] == "resend"
+
+    @pytest.mark.asyncio
+    async def test_an_unverified_domain_says_so(self, monkeypatch):
+        result = await self._send_with(
+            monkeypatch, 422, {"message": "The domain is not verified."}
+        )
+        assert result["success"] is False
+        assert result["error"] == "invalid_sender"
+        assert "verified" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_bad_key_says_so(self, monkeypatch):
+        result = await self._send_with(monkeypatch, 401, {"message": "Invalid API key"})
+        assert result["error"] == "auth_failed"
+
+    @pytest.mark.asyncio
+    async def test_rate_limiting_is_distinguished(self, monkeypatch):
+        result = await self._send_with(monkeypatch, 429, {})
+        assert result["error"] == "rate_limited"

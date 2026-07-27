@@ -1,11 +1,23 @@
-"""
-SMTP Email Sender service for outreach delivery.
-Supports Gmail, custom SMTP servers, and standard SMTP with TLS/SSL.
+"""Email delivery, over SMTP or an HTTP provider.
+
+Two backends, one interface. Which one runs is decided by what is configured,
+not by a flag somebody has to remember to set: if RESEND_API_KEY is present
+Resend is used, otherwise SMTP. EMAIL_PROVIDER overrides that when both are
+configured.
+
+Why a second backend at all: SMTP means holding a long-lived password, and
+Gmail in particular rejects normal account passwords, requires 2-Step
+Verification before an App Password can even be created, caps sending at a few
+hundred a day, and suspends accounts used for outreach. An HTTP API sidesteps
+the credential mess entirely and survives networks that block outbound SMTP
+ports, which several hosts do.
 """
 import os
 import logging
 import smtplib
 import ssl
+
+import httpx
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
@@ -49,10 +61,109 @@ def _config() -> dict:
     }
 
 
+RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+
+def _resend_config() -> dict:
+    return {
+        "api_key": os.environ.get("RESEND_API_KEY", "").strip(),
+        # Resend refuses any From address on a domain you have not verified,
+        # so this is separate from the SMTP sender rather than shared.
+        "from_email": (
+            os.environ.get("RESEND_FROM_EMAIL")
+            or os.environ.get("SMTP_FROM_EMAIL", "")
+        ).strip(),
+    }
+
+
+def active_provider() -> str:
+    """Which backend will actually send.
+
+    Inferred from configuration rather than requiring a flag, so a key pasted
+    into the dashboard takes effect without a second setting nobody documents.
+    """
+    explicit = os.environ.get("EMAIL_PROVIDER", "").strip().lower()
+    if explicit in ("smtp", "resend"):
+        return explicit
+    return "resend" if _resend_config()["api_key"] else "smtp"
+
+
 def is_email_configured() -> bool:
-    """Check if SMTP email sending is properly configured."""
+    """Whether the active provider has everything it needs."""
+    if active_provider() == "resend":
+        r = _resend_config()
+        return bool(r["api_key"] and r["from_email"])
     c = _config()
     return bool(c["host"] and c["username"] and c["password"] and c["from_email"])
+
+
+async def _send_via_resend(
+    to_email: str,
+    subject: str,
+    body_html: str,
+    body_text: Optional[str],
+    reply_to: Optional[str],
+    cc: Optional[list[str]],
+    bcc: Optional[list[str]],
+) -> dict:
+    """Send through Resend's HTTP API."""
+    r = _resend_config()
+    payload: dict = {
+        "from": r["from_email"],
+        "to": [to_email],
+        "subject": subject,
+        "html": body_html,
+    }
+    if body_text:
+        payload["text"] = body_text
+    if reply_to:
+        payload["reply_to"] = reply_to
+    if cc:
+        payload["cc"] = cc
+    if bcc:
+        payload["bcc"] = bcc
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                RESEND_ENDPOINT,
+                json=payload,
+                headers={"Authorization": f"Bearer {r['api_key']}"},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Resend request failed: %s", type(exc).__name__)
+        return {"success": False, "error": "network_error",
+                "message": f"Could not reach Resend: {type(exc).__name__}"}
+
+    if response.status_code in (200, 201):
+        logger.info("Email sent via Resend to %s", to_email)
+        return {"success": True, "message": f"Email sent to {to_email}",
+                "to": to_email, "subject": subject, "provider": "resend"}
+
+    # Resend's own message is more specific than anything we could infer, so
+    # it is surfaced rather than replaced — it names the unverified domain or
+    # the invalid key directly.
+    detail = ""
+    try:
+        detail = (response.json() or {}).get("message", "")
+    except (ValueError, AttributeError):
+        detail = response.text[:200]
+
+    if response.status_code in (401, 403):
+        return {"success": False, "error": "auth_failed",
+                "message": f"Resend rejected the API key. {detail}".strip()}
+    if response.status_code == 422:
+        return {"success": False, "error": "invalid_sender",
+                "message": (
+                    f"Resend refused the sender address. {detail} "
+                    "The From domain must be verified in your Resend dashboard."
+                ).strip()}
+    if response.status_code == 429:
+        return {"success": False, "error": "rate_limited",
+                "message": "Resend rate limit reached. Try again shortly."}
+
+    return {"success": False, "error": "send_failed",
+            "message": f"Resend returned {response.status_code}. {detail}".strip()}
 
 
 async def send_email(
@@ -80,6 +191,10 @@ async def send_email(
         Dict with status and details
     """
     if not is_email_configured():
+        if active_provider() == "resend":
+            missing = "RESEND_API_KEY" if not _resend_config()["api_key"] else "RESEND_FROM_EMAIL"
+            return {"success": False, "error": "email_not_configured",
+                    "message": f"Resend is not configured. Set {missing}."}
         return {
             "success": False,
             "error": "email_not_configured",
@@ -92,6 +207,13 @@ async def send_email(
             "error": "invalid_recipient",
             "message": f"Invalid recipient email: {to_email}",
         }
+
+    # Dispatch AFTER validation so both backends reject a bad recipient
+    # identically, and neither burns a network call on one.
+    if active_provider() == "resend":
+        return await _send_via_resend(
+            to_email, subject, body_html, body_text, reply_to, cc, bcc
+        )
 
     try:
         # Create message
@@ -261,9 +383,30 @@ def get_email_config_status() -> dict:
     reported only as booleans. Echoing an App Password back to the browser
     would put it in logs, screenshots and support threads.
     """
+    provider = active_provider()
+    if provider == "resend":
+        r = _resend_config()
+        return {
+            "configured": is_email_configured(),
+            "provider": "resend",
+            "host": "api.resend.com",
+            "port": 443,
+            "from_email": r["from_email"] or None,
+            "use_tls": True,
+            "username_set": bool(r["api_key"]),
+            "password_set": bool(r["api_key"]),
+            "missing": [
+                name for name, value in (
+                    ("RESEND_API_KEY", r["api_key"]),
+                    ("RESEND_FROM_EMAIL", r["from_email"]),
+                ) if not value
+            ],
+        }
+
     c = _config()
     return {
         "configured": is_email_configured(),
+        "provider": "smtp",
         "host": c["host"] or None,
         "port": c["port"],
         "from_email": c["from_email"] or None,

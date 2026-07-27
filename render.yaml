@@ -81,6 +81,24 @@ services:
       - key: SMTP_FROM_EMAIL
         sync: false
 
+      # --- Outreach email via Resend (preferred over SMTP) ---
+      # Setting RESEND_API_KEY switches delivery to Resend automatically; no
+      # other flag is needed, and the SMTP values above are then ignored.
+      #
+      # Resend needs a VERIFIED DOMAIN. Until torquetrendsllc.co.site is
+      # verified in the Resend dashboard, the only address it will send to is
+      # the one that owns the account — enough to test the pipeline, not
+      # enough to reach prospects.
+      #
+      # Read Resend's acceptable use policy before sending cold outreach
+      # through it: transactional providers generally prohibit unsolicited
+      # email and suspend accounts that send it.
+      - key: RESEND_API_KEY
+        sync: false
+      # Defaults to SMTP_FROM_EMAIL when unset. Must be on the verified domain.
+      - key: RESEND_FROM_EMAIL
+        sync: false
+
       # --- Scheduled automations ---
       # A long random value, e.g. `openssl rand -hex 32`. The SAME value must
       # be set as a GitHub repository secret named AUTOMATION_CRON_SECRET, so
