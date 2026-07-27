@@ -107,3 +107,60 @@ async def test_unmapped_category_still_falls_back_to_text_search(monkeypatch):
     assert "/forward" in search.path
     assert "widgets" in search.params["q"]
     assert "poi_category" not in search.params
+
+
+@pytest.mark.asyncio
+async def test_a_city_outside_the_country_list_still_searches(monkeypatch):
+    """A city anywhere must work, with or without a supported country.
+
+    The country dropdown lists only the 20 countries where the provider is
+    verified to return business POIs. That is honest, but until the Discover
+    page gained a city field it was also the ONLY geography control, so a user
+    in Nairobi or Manila could not say where they were: their search ran with
+    no proximity at all and returned businesses from anywhere on earth, which
+    is useless for a local-outreach tool.
+
+    Free-text geocoding covers far more of the world than any list we
+    maintain, so the city alone must be enough.
+    """
+    rec = _Recorder(
+        {"features": [{"properties": {"coordinates": {"longitude": 36.82, "latitude": -1.29}}}]},
+        {"features": [_poi("Java House Nairobi")]},
+    ).install(monkeypatch)
+
+    results = await mapbox_places.search_places(category="Cafe", location="Nairobi")
+
+    geocode, search = rec.calls[0], rec.calls[-1]
+    assert "geocode" in str(geocode), "the city must be geocoded"
+    assert "country" not in geocode.params, "no country filter — the city stands alone"
+    assert search.params["proximity"] == "36.82,-1.29", "results must centre on the city"
+    assert [r["business_name"] for r in results] == ["Java House Nairobi"]
+
+
+@pytest.mark.asyncio
+async def test_a_city_search_is_not_widened_to_the_whole_country(monkeypatch):
+    """A city search must stay local.
+
+    bbox is only correct for a country-wide search. Applying a country's bbox
+    to a city search would scatter results across the nation and defeat the
+    point of naming a city.
+    """
+    rec = _Recorder(
+        {
+            "features": [
+                {
+                    "properties": {
+                        "coordinates": {"longitude": 4.83, "latitude": 45.76},
+                        "bbox": [-5.2, 41.3, 9.6, 51.1],
+                    }
+                }
+            ]
+        },
+        {"features": [_poi("Boulangerie Lyonnaise")]},
+    ).install(monkeypatch)
+
+    await mapbox_places.search_places(category="Bakery", location="Lyon", country="France")
+
+    search = rec.calls[-1]
+    assert "bbox" not in search.params, "a named city must not be widened to its country"
+    assert search.params["proximity"] == "4.83,45.76"

@@ -12,18 +12,47 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# SMTP Configuration from environment
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", "")
-SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"
+def _config() -> dict:
+    """Read SMTP settings at call time, never at import.
+
+    These were module-level constants evaluated when the module was first
+    imported. That made the configuration unreachable in two situations that
+    both matter: a .env file loaded after the first import (local development
+    and Alembic), and any test that sets credentials via monkeypatch. It also
+    meant a corrected environment variable could not take effect without a
+    full process restart.
+
+    SMTP_PORT is parsed defensively: a non-numeric value used to raise
+    ValueError at import, which the router auto-loader swallows as a warning,
+    silently removing every outreach endpoint from the running application.
+    """
+    try:
+        port = int(os.environ.get("SMTP_PORT", "587"))
+    except ValueError:
+        logger.error(
+            "SMTP_PORT is not a number (%r); falling back to 587",
+            os.environ.get("SMTP_PORT"),
+        )
+        port = 587
+
+    return {
+        "host": os.environ.get("SMTP_HOST", "smtp.gmail.com").strip(),
+        "port": port,
+        # Gmail App Passwords are shown as "abcd efgh ijkl mnop". Pasting that
+        # verbatim fails authentication; the spaces are display formatting, not
+        # part of the secret. Stripping them here turns the single most common
+        # setup mistake into a non-event.
+        "username": os.environ.get("SMTP_USERNAME", "").strip(),
+        "password": os.environ.get("SMTP_PASSWORD", "").replace(" ", "").strip(),
+        "from_email": os.environ.get("SMTP_FROM_EMAIL", "").strip(),
+        "use_tls": os.environ.get("SMTP_USE_TLS", "true").strip().lower() == "true",
+    }
 
 
 def is_email_configured() -> bool:
     """Check if SMTP email sending is properly configured."""
-    return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM_EMAIL)
+    c = _config()
+    return bool(c["host"] and c["username"] and c["password"] and c["from_email"])
 
 
 async def send_email(
@@ -66,8 +95,9 @@ async def send_email(
 
     try:
         # Create message
+        c = _config()
         msg = MIMEMultipart("alternative")
-        msg["From"] = SMTP_FROM_EMAIL
+        msg["From"] = c["from_email"]
         msg["To"] = to_email
         msg["Subject"] = subject
 
@@ -92,22 +122,22 @@ async def send_email(
             all_recipients.extend(bcc)
 
         # Send via SMTP
-        if SMTP_USE_TLS and SMTP_PORT == 587:
+        if c["use_tls"] and c["port"] == 587:
             # STARTTLS on port 587
-            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+            server = smtplib.SMTP(c["host"], c["port"], timeout=30)
             server.ehlo()
             server.starttls(context=ssl.create_default_context())
             server.ehlo()
-        elif SMTP_PORT == 465:
+        elif c["port"] == 465:
             # SSL on port 465
             context = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=30)
+            server = smtplib.SMTP_SSL(c["host"], c["port"], context=context, timeout=30)
         else:
             # Plain SMTP
-            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+            server = smtplib.SMTP(c["host"], c["port"], timeout=30)
 
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.sendmail(SMTP_FROM_EMAIL, all_recipients, msg.as_string())
+        server.login(c["username"], c["password"])
+        server.sendmail(c["from_email"], all_recipients, msg.as_string())
         server.quit()
 
         logger.info(f"Email sent successfully to {to_email}: {subject}")
@@ -220,13 +250,32 @@ async def send_bulk_emails(
 
 
 def get_email_config_status() -> dict:
-    """Get the current email configuration status."""
+    """Report configuration state for the Settings screen.
+
+    Deliberately returns no secret: the host, port and sender address are
+    needed to diagnose a misconfiguration, but the username and password are
+    reported only as booleans. Echoing an App Password back to the browser
+    would put it in logs, screenshots and support threads.
+    """
+    c = _config()
     return {
         "configured": is_email_configured(),
-        "host": SMTP_HOST if SMTP_HOST else None,
-        "port": SMTP_PORT,
-        "from_email": SMTP_FROM_EMAIL if SMTP_FROM_EMAIL else None,
-        "use_tls": SMTP_USE_TLS,
-        "username_set": bool(SMTP_USERNAME),
-        "password_set": bool(SMTP_PASSWORD),
+        "host": c["host"] or None,
+        "port": c["port"],
+        "from_email": c["from_email"] or None,
+        "use_tls": c["use_tls"],
+        "username_set": bool(c["username"]),
+        "password_set": bool(c["password"]),
+        # Which specific fields are absent, so the UI can say what to fix
+        # rather than only that something is wrong.
+        "missing": [
+            name
+            for name, value in (
+                ("SMTP_HOST", c["host"]),
+                ("SMTP_USERNAME", c["username"]),
+                ("SMTP_PASSWORD", c["password"]),
+                ("SMTP_FROM_EMAIL", c["from_email"]),
+            )
+            if not value
+        ],
     }

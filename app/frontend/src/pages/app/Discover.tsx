@@ -80,6 +80,7 @@ export default function AppDiscover() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<Filters | null>(null);
   const [query, setQuery] = useState('');
+  const [city, setCity] = useState('');
   const [country, setCountry] = useState('all');
   const [category, setCategory] = useState('all');
   const [websiteState, setWebsiteState] = useState('all');
@@ -129,11 +130,11 @@ export default function AppDiscover() {
   };
 
   useEffect(() => {
-    if (user && (country !== 'all' || category !== 'all' || query)) {
+    if (user && (country !== 'all' || category !== 'all' || query || city.trim())) {
       const timer = setTimeout(getEstimate, 500);
       return () => clearTimeout(timer);
     }
-  }, [country, category, query, passType]);
+  }, [country, category, query, city, passType]);
 
   const handleSearch = async () => {
     if (!user) return;
@@ -148,6 +149,7 @@ export default function AppDiscover() {
         method: 'POST',
         data: {
           query: query || null,
+          city: city.trim() || null,
           country: country === 'all' ? null : country,
           category: category === 'all' ? null : category,
           website_state: websiteState,
@@ -306,7 +308,29 @@ export default function AppDiscover() {
         {/* Search Filters */}
         <Card className="border-slate-200">
           <CardContent className="p-5">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="space-y-1.5">
+                <Label htmlFor="city" className="text-xs font-medium text-slate-600">
+                  City or area
+                </Label>
+                {/*
+                  The product searches for LOCAL businesses, but until now the
+                  only geography control was a 20-item country dropdown. A user
+                  in Nairobi, Manila or Buenos Aires had no way to say where
+                  they were, and a country-wide search returns businesses from
+                  the geographic middle of a nation — useless for local
+                  outreach. Free text works anywhere MapBox can geocode, which
+                  is far more of the world than any list we maintain.
+                */}
+                <Input
+                  id="city"
+                  placeholder="e.g. Nairobi, Lyon, 90210"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                  className="border-slate-200"
+                />
+              </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium text-slate-600">Search Query</Label>
                 <Input
