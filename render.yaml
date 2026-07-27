@@ -99,19 +99,6 @@ services:
       - key: RESEND_FROM_EMAIL
         sync: false
 
-      # --- Outreach email via Mailercloud ---
-      # Takes precedence over both Resend and SMTP when set; no other flag
-      # needed. The sender address must be a verified sender or on a verified
-      # domain in the Mailercloud dashboard, otherwise every send is refused.
-      - key: MAILERCLOUD_API_KEY
-        sync: false
-      # Defaults to SMTP_FROM_EMAIL when unset.
-      - key: MAILERCLOUD_FROM_EMAIL
-        sync: false
-      # Optional display name on the From line, e.g. "Vishnu at BizLeads".
-      - key: MAILERCLOUD_FROM_NAME
-        sync: false
-
       # --- Scheduled automations ---
       # A long random value, e.g. `openssl rand -hex 32`. The SAME value must
       # be set as a GitHub repository secret named AUTOMATION_CRON_SECRET, so
