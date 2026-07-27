@@ -35,12 +35,10 @@ class Provider_connectionsData(BaseModel):
     workspace_id: int
     provider_type: str
     provider_name: str
-    status: str = None
-    config_json: str = None
-    last_health_check: str = None
-    error_count: int = None
-
-
+    status: Optional[str] = None
+    config_json: Optional[str] = None
+    last_health_check: Optional[str] = None
+    error_count: Optional[int] = None
 class Provider_connectionsUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     workspace_id: Optional[int] = None

@@ -25,17 +25,15 @@ router = APIRouter(prefix="/api/v1/entities/search_jobs", tags=["search_jobs"])
 class Search_jobsData(BaseModel):
     """Entity data schema (for create/update)"""
     workspace_id: int
-    status: str = None
-    filters_json: str = None
-    credits_estimated: int = None
-    credits_charged: int = None
-    results_count: int = None
-    progress_pct: int = None
-    error_message: str = None
-    started_at: str = None
-    completed_at: str = None
-
-
+    status: Optional[str] = None
+    filters_json: Optional[str] = None
+    credits_estimated: Optional[int] = None
+    credits_charged: Optional[int] = None
+    results_count: Optional[int] = None
+    progress_pct: Optional[int] = None
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
 class Search_jobsUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     workspace_id: Optional[int] = None

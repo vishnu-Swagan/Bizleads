@@ -26,17 +26,17 @@ class LeadsData(BaseModel):
     category: str
     location: str
     country: str
-    website_url: str = None
-    website_score: int = None
-    social_score: int = None
-    has_website: bool = None
-    social_platforms: str = None
-    contact_email: str = None
-    contact_phone: str = None
-    pipeline_stage: str = None
-    priority: str = None
-    notes_count: int = None
-    last_contacted: str = None
+    website_url: Optional[str] = None
+    website_score: Optional[int] = None
+    social_score: Optional[int] = None
+    has_website: Optional[bool] = None
+    social_platforms: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    pipeline_stage: Optional[str] = None
+    priority: Optional[str] = None
+    notes_count: Optional[int] = None
+    last_contacted: Optional[str] = None
     data_source: Optional[str] = None
 
 

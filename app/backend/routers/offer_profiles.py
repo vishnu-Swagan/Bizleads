@@ -25,20 +25,18 @@ router = APIRouter(prefix="/api/v1/entities/offer_profiles", tags=["offer_profil
 class Offer_profilesData(BaseModel):
     """Entity data schema (for create/update)"""
     workspace_id: int
-    services: str = None
-    platforms: str = None
-    price_range_min: int = None
-    price_range_max: int = None
-    target_categories: str = None
-    target_geographies: str = None
-    languages: str = None
-    min_client_size: str = None
-    max_client_size: str = None
-    monthly_capacity: int = None
-    preferred_channels: str = None
-    portfolio_tags: str = None
-
-
+    services: Optional[str] = None
+    platforms: Optional[str] = None
+    price_range_min: Optional[int] = None
+    price_range_max: Optional[int] = None
+    target_categories: Optional[str] = None
+    target_geographies: Optional[str] = None
+    languages: Optional[str] = None
+    min_client_size: Optional[str] = None
+    max_client_size: Optional[str] = None
+    monthly_capacity: Optional[int] = None
+    preferred_channels: Optional[str] = None
+    portfolio_tags: Optional[str] = None
 class Offer_profilesUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     workspace_id: Optional[int] = None

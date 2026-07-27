@@ -33,18 +33,16 @@ class WorkspacesData(BaseModel):
     name: str
     slug: str
     owner_id: str
-    plan: str = None
-    trial_ends_at: str = None
-    stripe_customer_id: str = None
-    stripe_subscription_id: str = None
-    subscription_status: str = None
-    monthly_credits: int = None
-    credits_used: int = None
-    credits_reset_at: str = None
-    max_seats: int = None
-    settings_json: str = None
-
-
+    plan: Optional[str] = None
+    trial_ends_at: Optional[str] = None
+    stripe_customer_id: Optional[str] = None
+    stripe_subscription_id: Optional[str] = None
+    subscription_status: Optional[str] = None
+    monthly_credits: Optional[int] = None
+    credits_used: Optional[int] = None
+    credits_reset_at: Optional[str] = None
+    max_seats: Optional[int] = None
+    settings_json: Optional[str] = None
 class WorkspacesUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     name: Optional[str] = None

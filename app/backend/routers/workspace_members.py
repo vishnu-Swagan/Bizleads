@@ -25,11 +25,9 @@ router = APIRouter(prefix="/api/v1/entities/workspace_members", tags=["workspace
 class Workspace_membersData(BaseModel):
     """Entity data schema (for create/update)"""
     workspace_id: int
-    role: str = None
-    invited_email: str = None
-    status: str = None
-
-
+    role: Optional[str] = None
+    invited_email: Optional[str] = None
+    status: Optional[str] = None
 class Workspace_membersUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     workspace_id: Optional[int] = None

@@ -28,11 +28,9 @@ class Credit_ledgerData(BaseModel):
     amount: int
     balance_after: int
     action: str
-    description: str = None
-    reference_id: str = None
-    idempotency_key: str = None
-
-
+    description: Optional[str] = None
+    reference_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
 class Credit_ledgerUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     workspace_id: Optional[int] = None

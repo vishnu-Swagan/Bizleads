@@ -24,9 +24,7 @@ class Lead_notesData(BaseModel):
     """Entity data schema (for create/update)"""
     lead_id: int
     content: str
-    note_type: str = None
-
-
+    note_type: Optional[str] = None
 class Lead_notesUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     lead_id: Optional[int] = None

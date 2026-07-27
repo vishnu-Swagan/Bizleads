@@ -23,14 +23,12 @@ router = APIRouter(prefix="/api/v1/entities/ai_interaction_logs", tags=["ai_inte
 class Ai_interaction_logsData(BaseModel):
     """Entity data schema (for create/update)"""
     action_type: str
-    input_summary: str = None
-    output_summary: str = None
+    input_summary: Optional[str] = None
+    output_summary: Optional[str] = None
     status: str
-    lead_id: int = None
-    metadata_json: str = None
-    duration_ms: int = None
-
-
+    lead_id: Optional[int] = None
+    metadata_json: Optional[str] = None
+    duration_ms: Optional[int] = None
 class Ai_interaction_logsUpdateData(BaseModel):
     """Update entity data (partial updates allowed)"""
     action_type: Optional[str] = None
