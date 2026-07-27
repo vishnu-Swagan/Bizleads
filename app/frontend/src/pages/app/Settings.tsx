@@ -7,10 +7,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
-import { CreditCard, Settings as SettingsIcon, Users, Plug, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
+import {
+  CreditCard, Settings as SettingsIcon, Users, Plug, CheckCircle2, ArrowRight, Loader2,
+  Mail, XCircle, AlertTriangle, ExternalLink, Send, ShieldAlert, Trash2,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface UsageData {
@@ -26,6 +33,38 @@ interface UsageData {
   credits_reset_at: string;
 }
 
+/**
+ * Per-customer email delivery configuration.
+ *
+ * This product is sold on subscription — every customer sends outreach from
+ * THEIR OWN mailbox, never a shared one. The backend never echoes back a
+ * secret: `smtp_password_set` / `resend_api_key_set` are booleans, not the
+ * values themselves, so the UI never has a real secret to accidentally
+ * render after the initial load.
+ */
+interface EmailSettingsData {
+  provider: 'smtp' | 'resend';
+  from_email: string | null;
+  from_name: string | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_username: string | null;
+  smtp_use_tls: boolean;
+  smtp_password_set: boolean;
+  resend_api_key_set: boolean;
+  verified_at: string | null;
+  last_error: string | null;
+  encryption_available: boolean;
+}
+
+/** Formats an ISO timestamp for display; never invents a value for a missing one. */
+function formatWhen(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export default function AppSettings() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -36,6 +75,23 @@ export default function AppSettings() {
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [providerStatus, setProviderStatus] = useState<{ mapbox_connected: boolean; pagespeed_connected: boolean } | null>(null);
+
+  // Email delivery — see EmailSettingsData above for why secrets are booleans.
+  const [emailData, setEmailData] = useState<EmailSettingsData | null>(null);
+  const [emailLoading, setEmailLoading] = useState(true);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailTesting, setEmailTesting] = useState(false);
+  const [emailDeleting, setEmailDeleting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [emailProvider, setEmailProvider] = useState<'smtp' | 'resend'>('smtp');
+  const [fromEmail, setFromEmail] = useState('');
+  const [fromName, setFromName] = useState('');
+  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
+  const [smtpPort, setSmtpPort] = useState('587');
+  const [smtpUsername, setSmtpUsername] = useState('');
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpUseTls, setSmtpUseTls] = useState(true);
+  const [resendApiKey, setResendApiKey] = useState('');
 
   const activeTab = location.pathname.includes('billing') ? 'billing' : 'workspace';
 
@@ -53,6 +109,10 @@ export default function AppSettings() {
 
   useEffect(() => {
     if (user) fetchUsage();
+  }, [user]);
+
+  useEffect(() => {
+    if (user) void loadEmailSettings();
   }, [user]);
 
   useEffect(() => {
@@ -89,6 +149,126 @@ export default function AppSettings() {
       toast.error('Payment verification failed. Please contact support.');
     } finally {
       setVerifying(false);
+    }
+  };
+
+  /** Populates the form from the server. Secrets never arrive — only *_set booleans. */
+  const loadEmailSettings = async () => {
+    setEmailLoading(true);
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/settings/email', method: 'GET', data: {} });
+      const d: EmailSettingsData = res.data;
+      setEmailData(d);
+      setEmailProvider(d.provider ?? 'smtp');
+      setFromEmail(d.from_email ?? '');
+      setFromName(d.from_name ?? '');
+      setSmtpHost(d.smtp_host ?? 'smtp.gmail.com');
+      setSmtpPort(d.smtp_port != null ? String(d.smtp_port) : '587');
+      setSmtpUsername(d.smtp_username ?? '');
+      setSmtpUseTls(d.smtp_use_tls ?? true);
+      setSmtpPassword('');
+      setResendApiKey('');
+      setTestResult(null);
+    } catch (err) {
+      console.error('Failed to load email settings:', err);
+      setEmailData(null);
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  /** True once the form differs from what is actually saved — a typed secret always counts. */
+  const emailFormDirty = (() => {
+    if (!emailData) return false;
+    return (
+      emailProvider !== emailData.provider ||
+      (fromEmail.trim() || null) !== (emailData.from_email || null) ||
+      (fromName.trim() || null) !== (emailData.from_name || null) ||
+      (smtpHost.trim() || null) !== (emailData.smtp_host || null) ||
+      (smtpPort ? parseInt(smtpPort, 10) : null) !== emailData.smtp_port ||
+      (smtpUsername.trim() || null) !== (emailData.smtp_username || null) ||
+      smtpUseTls !== emailData.smtp_use_tls ||
+      smtpPassword !== '' ||
+      resendApiKey !== ''
+    );
+  })();
+
+  const saveEmailSettings = async () => {
+    if (!fromEmail.trim()) {
+      toast.error('Enter the From email address you want outreach to send from.');
+      return;
+    }
+    setEmailSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        provider: emailProvider,
+        from_email: fromEmail.trim(),
+        from_name: fromName.trim() || null,
+        smtp_host: smtpHost.trim() || null,
+        smtp_port: smtpPort ? parseInt(smtpPort, 10) : null,
+        smtp_username: smtpUsername.trim() || null,
+        smtp_use_tls: smtpUseTls,
+      };
+      // Omitted entirely when blank, so the backend keeps whatever secret is
+      // already stored rather than overwriting it with an empty value.
+      if (smtpPassword) payload.smtp_password = smtpPassword;
+      if (resendApiKey) payload.resend_api_key = resendApiKey;
+
+      const res = await client.apiCall.invoke({ url: '/api/v1/settings/email', method: 'PUT', data: payload });
+      const d: EmailSettingsData = res.data;
+      setEmailData(d);
+      setEmailProvider(d.provider ?? emailProvider);
+      setFromEmail(d.from_email ?? '');
+      setFromName(d.from_name ?? '');
+      setSmtpHost(d.smtp_host ?? '');
+      setSmtpPort(d.smtp_port != null ? String(d.smtp_port) : '');
+      setSmtpUsername(d.smtp_username ?? '');
+      setSmtpUseTls(d.smtp_use_tls ?? true);
+      // Cleared even though we just typed them — never keep a secret sitting
+      // in state once it has been sent, so it can never render again.
+      setSmtpPassword('');
+      setResendApiKey('');
+      setTestResult(null);
+      toast.success('Email settings saved');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not save email settings');
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const sendTestEmail = async () => {
+    setEmailTesting(true);
+    setTestResult(null);
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/settings/email/test', method: 'POST', data: {} });
+      const result = { success: !!res.data?.success, message: res.data?.message ?? '' };
+      setTestResult(result);
+      if (result.success) {
+        toast.success('Test email sent — check your inbox');
+        await loadEmailSettings();
+      } else {
+        toast.error(result.message || 'Test email failed');
+      }
+    } catch (err: any) {
+      const message = err?.data?.message ?? err?.data?.detail ?? 'Failed to send test email';
+      setTestResult({ success: false, message });
+      toast.error(message);
+    } finally {
+      setEmailTesting(false);
+    }
+  };
+
+  const deleteEmailSettings = async () => {
+    setEmailDeleting(true);
+    try {
+      await client.apiCall.invoke({ url: '/api/v1/settings/email', method: 'DELETE', data: {} });
+      toast.success('Email configuration removed');
+      await loadEmailSettings();
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not remove email configuration');
+    } finally {
+      setEmailDeleting(false);
     }
   };
 
@@ -165,6 +345,331 @@ export default function AppSettings() {
                   </div>
                 </div>
                 <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700">Save Profile</Button>
+              </CardContent>
+            </Card>
+
+            {/* Email delivery — the first thing every new customer must complete before
+                outreach can send, because each customer sends from their own mailbox. */}
+            <Card className="border-slate-200">
+              <CardHeader>
+                <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-slate-500" />
+                  Email delivery
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {emailLoading ? (
+                  <Skeleton className="h-40 w-full" />
+                ) : (
+                  <>
+                    {/* Verification state, always visible at the top. Untested must never
+                        look like working — a gray badge, not a green one, is the default. */}
+                    {emailData?.last_error ? (
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                        <div className="flex items-start gap-2">
+                          <XCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-red-800">Last test failed</p>
+                            <p className="mt-0.5 text-sm text-red-700 break-words">{emailData.last_error}</p>
+                            {emailData.verified_at && (
+                              <p className="mt-1 text-xs text-red-600">
+                                Previously verified {formatWhen(emailData.verified_at)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : emailData?.verified_at ? (
+                      <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-3">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
+                        <p className="text-sm text-green-800">
+                          <span className="font-medium">Verified</span> — test email sent{' '}
+                          {formatWhen(emailData.verified_at)}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+                        <p className="text-sm text-slate-600">
+                          Not yet tested — send a test email below to confirm delivery actually works
+                          before you rely on it for outreach.
+                        </p>
+                      </div>
+                    )}
+
+                    {emailData && !emailData.encryption_available && (
+                      <Alert variant="destructive">
+                        <ShieldAlert className="h-4 w-4" />
+                        <AlertTitle>Credential storage is unavailable</AlertTitle>
+                        <AlertDescription>
+                          The operator must set <code className="text-xs">CREDENTIAL_ENCRYPTION_KEY</code>{' '}
+                          on the API service before any password or API key can be saved. The form below
+                          is disabled so nothing you type is lost or stored insecurely.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    <fieldset
+                      disabled={!emailData?.encryption_available}
+                      className="space-y-5 disabled:opacity-60"
+                    >
+                      {/* Provider choice */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-medium text-slate-600">Send using</Label>
+                        <RadioGroup
+                          value={emailProvider}
+                          onValueChange={(v) => setEmailProvider(v as 'smtp' | 'resend')}
+                          className="grid gap-2 sm:grid-cols-2"
+                        >
+                          <Label
+                            htmlFor="provider-smtp"
+                            className={cn(
+                              'flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm',
+                              emailProvider === 'smtp'
+                                ? 'border-indigo-300 bg-indigo-50 text-indigo-900'
+                                : 'border-slate-200 text-slate-700',
+                            )}
+                          >
+                            <RadioGroupItem value="smtp" id="provider-smtp" className="cursor-pointer" />
+                            SMTP (e.g. Gmail)
+                          </Label>
+                          <Label
+                            htmlFor="provider-resend"
+                            className={cn(
+                              'flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm',
+                              emailProvider === 'resend'
+                                ? 'border-indigo-300 bg-indigo-50 text-indigo-900'
+                                : 'border-slate-200 text-slate-700',
+                            )}
+                          >
+                            <RadioGroupItem value="resend" id="provider-resend" className="cursor-pointer" />
+                            Resend
+                          </Label>
+                        </RadioGroup>
+                      </div>
+
+                      {emailProvider === 'smtp' ? (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1.5">
+                            <Label htmlFor="smtp-host" className="text-xs font-medium text-slate-600">
+                              SMTP host
+                            </Label>
+                            <Input
+                              id="smtp-host"
+                              placeholder="smtp.gmail.com"
+                              value={smtpHost}
+                              onChange={(e) => setSmtpHost(e.target.value)}
+                              className="border-slate-200"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="smtp-port" className="text-xs font-medium text-slate-600">
+                              Port
+                            </Label>
+                            <Input
+                              id="smtp-port"
+                              type="number"
+                              placeholder="587"
+                              value={smtpPort}
+                              onChange={(e) => setSmtpPort(e.target.value)}
+                              className="border-slate-200"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="smtp-username" className="text-xs font-medium text-slate-600">
+                              Username
+                            </Label>
+                            <Input
+                              id="smtp-username"
+                              placeholder="you@gmail.com"
+                              value={smtpUsername}
+                              onChange={(e) => setSmtpUsername(e.target.value)}
+                              className="border-slate-200"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="smtp-password" className="text-xs font-medium text-slate-600">
+                              Password
+                            </Label>
+                            <Input
+                              id="smtp-password"
+                              type="password"
+                              placeholder={
+                                emailData?.smtp_password_set
+                                  ? '••••••••  (leave blank to keep)'
+                                  : 'App password (16 characters)'
+                              }
+                              value={smtpPassword}
+                              onChange={(e) => setSmtpPassword(e.target.value)}
+                              className="border-slate-200"
+                              autoComplete="new-password"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 sm:col-span-2">
+                            <div>
+                              <Label htmlFor="smtp-tls" className="text-sm font-medium text-slate-900">
+                                Use TLS
+                              </Label>
+                              <p className="text-xs text-slate-500">Required by Gmail and most providers.</p>
+                            </div>
+                            <Switch id="smtp-tls" checked={smtpUseTls} onCheckedChange={setSmtpUseTls} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="resend-key" className="text-xs font-medium text-slate-600">
+                            Resend API key
+                          </Label>
+                          <Input
+                            id="resend-key"
+                            type="password"
+                            placeholder={
+                              emailData?.resend_api_key_set
+                                ? '••••••••  (leave blank to keep)'
+                                : 're_xxxxxxxxxxxxxxxxxxxxxxxx'
+                            }
+                            value={resendApiKey}
+                            onChange={(e) => setResendApiKey(e.target.value)}
+                            className="border-slate-200"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                      )}
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="from-email" className="text-xs font-medium text-slate-600">
+                            From email
+                          </Label>
+                          <Input
+                            id="from-email"
+                            type="email"
+                            placeholder="you@yourbusiness.com"
+                            value={fromEmail}
+                            onChange={(e) => setFromEmail(e.target.value)}
+                            className="border-slate-200"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="from-name" className="text-xs font-medium text-slate-600">
+                            From name
+                          </Label>
+                          <Input
+                            id="from-name"
+                            placeholder="Your name or business"
+                            value={fromName}
+                            onChange={(e) => setFromName(e.target.value)}
+                            className="border-slate-200"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Provider-specific setup help, answered inline rather than making
+                          the customer go find it. */}
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                        {emailProvider === 'smtp' ? (
+                          <>
+                            <p className="font-medium text-slate-900">Using Gmail?</p>
+                            <ol className="mt-2 list-decimal space-y-1.5 pl-5">
+                              <li>Turn on 2-Step Verification for the account first.</li>
+                              <li>
+                                Create an App Password at{' '}
+                                <a
+                                  href="https://myaccount.google.com/apppasswords"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-indigo-600 underline underline-offset-2"
+                                >
+                                  myaccount.google.com/apppasswords
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                              </li>
+                              <li>
+                                Use those 16 letters as the password above. Your normal account
+                                password is always rejected.
+                              </li>
+                            </ol>
+                          </>
+                        ) : (
+                          <>
+                            <p className="font-medium text-slate-900">Using Resend</p>
+                            <p className="mt-2">
+                              Verify your sending domain at{' '}
+                              <a
+                                href="https://resend.com/domains"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-indigo-600 underline underline-offset-2"
+                              >
+                                resend.com/domains
+                                <ExternalLink className="h-3 w-3" />
+                              </a>{' '}
+                              — until it is verified, Resend only delivers to the address that owns
+                              the account.
+                            </p>
+                          </>
+                        )}
+                      </div>
+
+                      {testResult && !testResult.success && (
+                        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                          <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                          <span className="break-words">{testResult.message}</span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <Button
+                          onClick={saveEmailSettings}
+                          disabled={emailSaving || !emailFormDirty}
+                          className="bg-indigo-600 hover:bg-indigo-700 gap-2 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          {emailSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Save
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={sendTestEmail}
+                          disabled={emailTesting || emailFormDirty || !emailData?.from_email}
+                          title={
+                            emailFormDirty
+                              ? 'Save your changes first'
+                              : !emailData?.from_email
+                              ? 'Set a From email and save first'
+                              : undefined
+                          }
+                          className="border-slate-200 gap-2 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          {emailTesting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Send className="h-3.5 w-3.5" />
+                          )}
+                          {emailTesting ? 'Sending...' : 'Send test email'}
+                        </Button>
+                        {(emailData?.smtp_password_set || emailData?.resend_api_key_set || emailData?.from_email) && (
+                          <Button
+                            variant="outline"
+                            onClick={deleteEmailSettings}
+                            disabled={emailDeleting}
+                            className="border-red-200 text-red-600 hover:bg-red-50 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                          >
+                            {emailDeleting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            Remove
+                          </Button>
+                        )}
+                        <p className="text-xs text-slate-500">
+                          The test sends to <strong className="text-slate-700">your own</strong> signed-in
+                          account address.
+                        </p>
+                      </div>
+                    </fieldset>
+                  </>
+                )}
               </CardContent>
             </Card>
 

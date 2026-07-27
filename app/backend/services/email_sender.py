@@ -11,6 +11,25 @@ Verification before an App Password can even be created, caps sending at a few
 hundred a day, and suspends accounts used for outreach. An HTTP API sidesteps
 the credential mess entirely and survives networks that block outbound SMTP
 ports, which several hosts do.
+
+Every send is against an explicit, resolved `EmailIdentity` rather than
+whatever happens to be in the process environment. That used to be the only
+option: every workspace's outreach left from the one address in
+SMTP_*/RESEND_* env vars, which is fine for a single operator and wrong the
+moment this product has more than one customer — one customer's spam
+complaint would blacklist the shared domain for everyone else, replies would
+land in the operator's inbox instead of the customer's, and the Terms name
+the customer as the sender.
+
+The environment variables still matter, though: they are the OPERATOR'S OWN
+sending account, kept as the fallback used only when a workspace has not
+configured one of its own (see `_environment_identity()` below, and
+services/email_identity.py which is where that fallback decision actually
+gets made). `identity=None` on every public function means "use that
+fallback" and exists for two reasons: it is what the operator's own account
+uses, and it is what every test in tests/test_email_config.py already
+exercises — preserving that behaviour matters more than a purely-explicit
+signature.
 """
 import os
 import logging
@@ -18,11 +37,35 @@ import smtplib
 import ssl
 
 import httpx
+from dataclasses import dataclass
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EmailIdentity:
+    """One workspace's (or the operator's) resolved sending identity.
+
+    Everything a send needs, already decided: which provider, and that
+    provider's credentials. Never constructed with secrets read from
+    anywhere other than services/email_identity.py (per-workspace, decrypted
+    from models.email_configs) or `_environment_identity()` below (the
+    operator's own fallback) — nothing in this module reaches into the
+    database or the environment except that one function.
+    """
+
+    provider: str = "smtp"  # "smtp" | "resend"
+    from_email: str = ""
+    from_name: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    resend_api_key: str = ""
 
 def _config() -> dict:
     """Read SMTP settings at call time, never at import.
@@ -90,16 +133,44 @@ def active_provider() -> str:
     return "smtp"
 
 
-def is_email_configured() -> bool:
-    """Whether the active provider has everything it needs."""
+def _environment_identity() -> EmailIdentity:
+    """The operator's own sending account, read from the process environment.
+
+    This is the fallback path, and ONLY the fallback path: it exists for the
+    operator's own default account, used when a workspace has not configured
+    a sending identity of its own (see services/email_identity.resolve_identity,
+    which is where that decision is actually made — this function only builds
+    the EmailIdentity, it does not decide when to use it).
+    """
     if active_provider() == "resend":
         r = _resend_config()
-        return bool(r["api_key"] and r["from_email"])
+        return EmailIdentity(provider="resend", from_email=r["from_email"], resend_api_key=r["api_key"])
     c = _config()
-    return bool(c["host"] and c["username"] and c["password"] and c["from_email"])
+    return EmailIdentity(
+        provider="smtp",
+        from_email=c["from_email"],
+        smtp_host=c["host"],
+        smtp_port=c["port"],
+        smtp_username=c["username"],
+        smtp_password=c["password"],
+        smtp_use_tls=c["use_tls"],
+    )
+
+
+def is_email_configured(identity: Optional[EmailIdentity] = None) -> bool:
+    """Whether the given identity has everything its provider needs.
+
+    `identity=None` means the operator's own environment-configured account —
+    see the fallback note in the module docstring.
+    """
+    identity = identity or _environment_identity()
+    if identity.provider == "resend":
+        return bool(identity.resend_api_key and identity.from_email)
+    return bool(identity.smtp_host and identity.smtp_username and identity.smtp_password and identity.from_email)
 
 
 async def _send_via_resend(
+    identity: EmailIdentity,
     to_email: str,
     subject: str,
     body_html: str,
@@ -108,10 +179,9 @@ async def _send_via_resend(
     cc: Optional[list[str]],
     bcc: Optional[list[str]],
 ) -> dict:
-    """Send through Resend's HTTP API."""
-    r = _resend_config()
+    """Send through Resend's HTTP API, using the given identity's credentials."""
     payload: dict = {
-        "from": r["from_email"],
+        "from": identity.from_email,
         "to": [to_email],
         "subject": subject,
         "html": body_html,
@@ -130,7 +200,7 @@ async def _send_via_resend(
             response = await client.post(
                 RESEND_ENDPOINT,
                 json=payload,
-                headers={"Authorization": f"Bearer {r['api_key']}"},
+                headers={"Authorization": f"Bearer {identity.resend_api_key}"},
             )
     except httpx.HTTPError as exc:
         logger.error("Resend request failed: %s", type(exc).__name__)
@@ -176,9 +246,10 @@ async def send_email(
     reply_to: Optional[str] = None,
     cc: Optional[list[str]] = None,
     bcc: Optional[list[str]] = None,
+    identity: Optional[EmailIdentity] = None,
 ) -> dict:
     """
-    Send an email via SMTP.
+    Send an email via SMTP or Resend, using `identity`'s credentials.
 
     Args:
         to_email: Recipient email address
@@ -188,19 +259,39 @@ async def send_email(
         reply_to: Reply-to address
         cc: CC recipients
         bcc: BCC recipients
+        identity: The resolved sending identity to send as. Callers should
+            pass the result of services.email_identity.resolve_identity() so
+            a workspace's own credentials are used and its own reputation is
+            on the line, not the operator's. When omitted, this falls back
+            to the OPERATOR'S OWN environment-configured account — see the
+            module docstring. That fallback is deliberate and exists for two
+            reasons: it is the operator's own default sending account, and
+            every test in tests/test_email_config.py already depends on
+            being able to call this without an identity.
 
     Returns:
         Dict with status and details
     """
-    if not is_email_configured():
-        if active_provider() == "resend":
-            missing = "RESEND_API_KEY" if not _resend_config()["api_key"] else "RESEND_FROM_EMAIL"
-            return {"success": False, "error": "email_not_configured",
-                    "message": f"Resend is not configured. Set {missing}."}
+    using_env = identity is None
+    identity = identity or _environment_identity()
+
+    if not is_email_configured(identity):
+        if identity.provider == "resend":
+            if using_env:
+                missing = "RESEND_API_KEY" if not identity.resend_api_key else "RESEND_FROM_EMAIL"
+                message = f"Resend is not configured. Set {missing}."
+            else:
+                missing = "API key" if not identity.resend_api_key else "From address"
+                message = f"Resend sending account is not configured. Missing: {missing}."
+            return {"success": False, "error": "email_not_configured", "message": message}
+        if using_env:
+            message = "SMTP email is not configured. Please set SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM_EMAIL."
+        else:
+            message = "SMTP sending account is not fully configured. Please set the host, username, password and From address."
         return {
             "success": False,
             "error": "email_not_configured",
-            "message": "SMTP email is not configured. Please set SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM_EMAIL.",
+            "message": message,
         }
 
     if not to_email or "@" not in to_email:
@@ -212,17 +303,15 @@ async def send_email(
 
     # Dispatch AFTER validation so both backends reject a bad recipient
     # identically, and neither burns a network call on one.
-    provider = active_provider()
-    if provider == "resend":
+    if identity.provider == "resend":
         return await _send_via_resend(
-            to_email, subject, body_html, body_text, reply_to, cc, bcc
+            identity, to_email, subject, body_html, body_text, reply_to, cc, bcc
         )
 
     try:
         # Create message
-        c = _config()
         msg = MIMEMultipart("alternative")
-        msg["From"] = c["from_email"]
+        msg["From"] = identity.from_email
         msg["To"] = to_email
         msg["Subject"] = subject
 
@@ -247,22 +336,22 @@ async def send_email(
             all_recipients.extend(bcc)
 
         # Send via SMTP
-        if c["use_tls"] and c["port"] == 587:
+        if identity.smtp_use_tls and identity.smtp_port == 587:
             # STARTTLS on port 587
-            server = smtplib.SMTP(c["host"], c["port"], timeout=30)
+            server = smtplib.SMTP(identity.smtp_host, identity.smtp_port, timeout=30)
             server.ehlo()
             server.starttls(context=ssl.create_default_context())
             server.ehlo()
-        elif c["port"] == 465:
+        elif identity.smtp_port == 465:
             # SSL on port 465
             context = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(c["host"], c["port"], context=context, timeout=30)
+            server = smtplib.SMTP_SSL(identity.smtp_host, identity.smtp_port, context=context, timeout=30)
         else:
             # Plain SMTP
-            server = smtplib.SMTP(c["host"], c["port"], timeout=30)
+            server = smtplib.SMTP(identity.smtp_host, identity.smtp_port, timeout=30)
 
-        server.login(c["username"], c["password"])
-        server.sendmail(c["from_email"], all_recipients, msg.as_string())
+        server.login(identity.smtp_username, identity.smtp_password)
+        server.sendmail(identity.from_email, all_recipients, msg.as_string())
         server.quit()
 
         logger.info(f"Email sent successfully to {to_email}: {subject}")
@@ -282,7 +371,7 @@ async def send_email(
             # so the useful diagnosis has to come from inspecting what was
             # actually configured. "Check your username and password" sends
             # people round in circles re-typing a correct password.
-            "message": diagnose_auth_failure(),
+            "message": diagnose_auth_failure(None if using_env else identity),
         }
     except smtplib.SMTPRecipientsRefused as e:
         logger.error(f"Recipient refused: {e}")
@@ -312,20 +401,25 @@ async def send_bulk_emails(
     subject_template: str,
     body_html_template: str,
     body_text_template: Optional[str] = None,
+    identity: Optional[EmailIdentity] = None,
 ) -> dict:
     """
     Send emails to multiple recipients with template substitution.
 
     Args:
         recipients: List of dicts with 'email' and optional 'name', 'business_name' fields
-        subject_template: Subject with {name}, {business_name} placeholders
+        subject_template: Subject with {name}, {business_name} placeholders (not SQL -
+            these are plain str.format() templates over trusted, operator-authored text)
         body_html_template: HTML body with placeholders
         body_text_template: Plain text body with placeholders
+        identity: The resolved sending identity to send as (see send_email).
+            Omitted means the operator's own environment-configured account.
 
     Returns:
         Summary of send results
     """
-    if not is_email_configured():
+    identity = identity or _environment_identity()
+    if not is_email_configured(identity):
         return {
             "success": False,
             "error": "email_not_configured",
@@ -343,7 +437,7 @@ async def send_bulk_emails(
         name = recipient.get("name", "there")
         business_name = recipient.get("business_name", "your business")
 
-        # Template substitution
+        # Template substitution (plain string formatting, not SQL)
         subject = subject_template.format(
             name=name, business_name=business_name, email=email
         )
@@ -361,6 +455,7 @@ async def send_bulk_emails(
             subject=subject,
             body_html=body_html,
             body_text=body_text,
+            identity=identity,
         )
 
         if result["success"]:
@@ -378,56 +473,69 @@ async def send_bulk_emails(
     }
 
 
-def get_email_config_status() -> dict:
+def get_email_config_status(identity: Optional[EmailIdentity] = None) -> dict:
     """Report configuration state for the Settings screen.
 
     Deliberately returns no secret: the host, port and sender address are
     needed to diagnose a misconfiguration, but the username and password are
     reported only as booleans. Echoing an App Password back to the browser
     would put it in logs, screenshots and support threads.
+
+    `identity=None` reports on the operator's own environment-configured
+    account (see module docstring); the "missing" list then names the actual
+    env vars to set, exactly as it always has. Passed an explicit workspace
+    identity, "missing" instead names the field, since there is no env var
+    for a customer to set.
     """
-    provider = active_provider()
-    if provider == "resend":
-        r = _resend_config()
+    using_env = identity is None
+    identity = identity or _environment_identity()
+    configured = is_email_configured(identity)
+
+    if identity.provider == "resend":
+        missing_fields = (
+            (("RESEND_API_KEY", identity.resend_api_key), ("RESEND_FROM_EMAIL", identity.from_email))
+            if using_env
+            else (("api_key", identity.resend_api_key), ("from_email", identity.from_email))
+        )
         return {
-            "configured": is_email_configured(),
+            "configured": configured,
             "provider": "resend",
             "host": "api.resend.com",
             "port": 443,
-            "from_email": r["from_email"] or None,
+            "from_email": identity.from_email or None,
             "use_tls": True,
-            "username_set": bool(r["api_key"]),
-            "password_set": bool(r["api_key"]),
-            "missing": [
-                name for name, value in (
-                    ("RESEND_API_KEY", r["api_key"]),
-                    ("RESEND_FROM_EMAIL", r["from_email"]),
-                ) if not value
-            ],
+            "username_set": bool(identity.resend_api_key),
+            "password_set": bool(identity.resend_api_key),
+            "missing": [name for name, value in missing_fields if not value],
         }
 
-    c = _config()
+    missing_fields = (
+        (
+            ("SMTP_HOST", identity.smtp_host),
+            ("SMTP_USERNAME", identity.smtp_username),
+            ("SMTP_PASSWORD", identity.smtp_password),
+            ("SMTP_FROM_EMAIL", identity.from_email),
+        )
+        if using_env
+        else (
+            ("smtp_host", identity.smtp_host),
+            ("smtp_username", identity.smtp_username),
+            ("smtp_password", identity.smtp_password),
+            ("from_email", identity.from_email),
+        )
+    )
     return {
-        "configured": is_email_configured(),
+        "configured": configured,
         "provider": "smtp",
-        "host": c["host"] or None,
-        "port": c["port"],
-        "from_email": c["from_email"] or None,
-        "use_tls": c["use_tls"],
-        "username_set": bool(c["username"]),
-        "password_set": bool(c["password"]),
+        "host": identity.smtp_host or None,
+        "port": identity.smtp_port,
+        "from_email": identity.from_email or None,
+        "use_tls": identity.smtp_use_tls,
+        "username_set": bool(identity.smtp_username),
+        "password_set": bool(identity.smtp_password),
         # Which specific fields are absent, so the UI can say what to fix
         # rather than only that something is wrong.
-        "missing": [
-            name
-            for name, value in (
-                ("SMTP_HOST", c["host"]),
-                ("SMTP_USERNAME", c["username"]),
-                ("SMTP_PASSWORD", c["password"]),
-                ("SMTP_FROM_EMAIL", c["from_email"]),
-            )
-            if not value
-        ],
+        "missing": [name for name, value in missing_fields if not value],
     }
 
 
@@ -435,18 +543,22 @@ def get_email_config_status() -> dict:
 GMAIL_APP_PASSWORD_LENGTH = 16
 
 
-def diagnose_auth_failure() -> str:
+def diagnose_auth_failure(identity: Optional[EmailIdentity] = None) -> str:
     """Explain a rejected login from what is actually configured.
 
     Gmail answers every credential problem with the same opaque error, so the
     generic "check your username and password" is close to useless — the
     password is usually right, it is simply the wrong KIND of password. These
     checks name the specific mistake instead.
+
+    `identity=None` diagnoses the operator's own environment-configured
+    account, exactly as before.
     """
-    c = _config()
-    host = (c["host"] or "").lower()
-    username, password = c["username"], c["password"]
-    is_google = "gmail" in host or "google" in host
+    identity = identity or _environment_identity()
+    host = identity.smtp_host or ""
+    username, password = identity.smtp_username, identity.smtp_password
+    from_email = identity.from_email
+    is_google = "gmail" in host.lower() or "google" in host.lower()
 
     problems = []
 
@@ -465,9 +577,9 @@ def diagnose_auth_failure() -> str:
             "Gmail always rejects for SMTP."
         )
 
-    if is_google and username and c["from_email"] and username.lower() != c["from_email"].lower():
+    if is_google and username and from_email and username.lower() != from_email.lower():
         problems.append(
-            f"SMTP_USERNAME ({username}) and SMTP_FROM_EMAIL ({c['from_email']}) differ. "
+            f"SMTP_USERNAME ({username}) and SMTP_FROM_EMAIL ({from_email}) differ. "
             "Gmail only lets you send as the account you authenticated with, unless the "
             "address is a verified alias."
         )
@@ -486,5 +598,5 @@ def diagnose_auth_failure() -> str:
 
     return (
         "The mail server rejected the login. Check the username and password for "
-        f"{c['host'] or 'the SMTP host'}, and that the account permits SMTP access."
+        f"{host or 'the SMTP host'}, and that the account permits SMTP access."
     )

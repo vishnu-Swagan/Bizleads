@@ -16,7 +16,8 @@ from schemas.auth import UserResponse
 from models.leads import Leads
 from models.outreach_drafts import Outreach_drafts
 from services.pagespeed import is_pagespeed_configured, audit_website, bulk_audit
-from services.email_sender import is_email_configured, send_email, send_bulk_emails, get_email_config_status
+from services.email_sender import send_email, send_bulk_emails, get_email_config_status
+from services.email_identity import resolve_identity
 from services.outreach_composer import compose_many
 from services.leads import LeadsService
 
@@ -80,6 +81,13 @@ async def run_bulk_audit(
 
 
 # --- Email Outreach Endpoints ---
+#
+# Every send here resolves the CALLER's own sending identity first (see
+# services/email_identity.resolve_identity) rather than reading SMTP_*/
+# RESEND_* out of the process environment directly. That environment account
+# still exists as a fallback for a workspace that has not configured one of
+# its own, but which credentials actually get used is decided per-request,
+# per-user - never once at import time for the whole process.
 
 class SendEmailRequest(BaseModel):
     to_email: str
@@ -96,17 +104,46 @@ class BulkEmailRequest(BaseModel):
     body_text_template: Optional[str] = None
 
 
+_EMAIL_NOT_CONFIGURED_DETAIL = (
+    "Email sending is not configured. Please set up your sending account in "
+    "Settings > Email."
+)
+
+
+async def _status_for(db: AsyncSession, user_id: str) -> dict:
+    """Config status for one user's resolved identity, never another's.
+
+    Deliberately does NOT fall back to get_email_config_status(identity=None)
+    when resolve_identity comes back empty - that would silently report the
+    operator's raw environment state (host set, but say password missing) as
+    if it were this user's own configuration, which it never was.
+    """
+    identity = await resolve_identity(db, user_id)
+    if identity is None:
+        return {
+            "configured": False,
+            "provider": None,
+            "host": None,
+            "port": None,
+            "from_email": None,
+            "use_tls": True,
+            "username_set": False,
+            "password_set": False,
+            "missing": ["email_settings"],
+        }
+    return get_email_config_status(identity)
+
+
 @router.post("/send-email")
 async def send_outreach_email(
     data: SendEmailRequest,
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Send a single outreach email to a lead."""
-    if not is_email_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations."
-        )
+    """Send a single outreach email to a lead, from the caller's own account."""
+    identity = await resolve_identity(db, current_user.id)
+    if identity is None:
+        raise HTTPException(status_code=503, detail=_EMAIL_NOT_CONFIGURED_DETAIL)
 
     result = await send_email(
         to_email=data.to_email,
@@ -114,6 +151,7 @@ async def send_outreach_email(
         body_html=data.body_html,
         body_text=data.body_text,
         reply_to=data.reply_to,
+        identity=identity,
     )
 
     if not result["success"]:
@@ -126,13 +164,12 @@ async def send_outreach_email(
 async def send_bulk_outreach(
     data: BulkEmailRequest,
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Send outreach emails to multiple leads using templates."""
-    if not is_email_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations."
-        )
+    """Send outreach emails to multiple leads using templates, from the caller's own account."""
+    identity = await resolve_identity(db, current_user.id)
+    if identity is None:
+        raise HTTPException(status_code=503, detail=_EMAIL_NOT_CONFIGURED_DETAIL)
 
     if not data.recipients:
         raise HTTPException(status_code=400, detail="No recipients provided")
@@ -142,6 +179,7 @@ async def send_bulk_outreach(
         subject_template=data.subject_template,
         body_html_template=data.body_html_template,
         body_text_template=data.body_text_template,
+        identity=identity,
     )
 
     return result
@@ -150,25 +188,27 @@ async def send_bulk_outreach(
 @router.get("/email-status")
 async def get_email_status(
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get the current email configuration status."""
-    return get_email_config_status()
+    """Get the caller's own email configuration status."""
+    return await _status_for(db, current_user.id)
 
 
 @router.get("/status")
 async def get_outreach_status(
     current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get overall outreach capabilities status."""
+    """Get overall outreach capabilities status for the caller."""
+    email_status = await _status_for(db, current_user.id)
     return {
         "pagespeed": {
             "configured": is_pagespeed_configured(),
             "description": "Website performance audits via Google PageSpeed Insights",
         },
         "email": {
-            "configured": is_email_configured(),
-            "description": "SMTP/Gmail email sending for lead outreach",
-            **get_email_config_status(),
+            "description": "SMTP/Gmail/Resend email sending for lead outreach, from your own account",
+            **email_status,
         },
     }
 
@@ -236,7 +276,7 @@ async def compose_drafts(
         sender_business=(data.sender_business or "").strip(),
     )
     result["not_found"] = not_found
-    result["email_configured"] = is_email_configured()
+    result["email_configured"] = (await resolve_identity(db, current_user.id)) is not None
     return result
 
 
@@ -356,17 +396,16 @@ async def send_queued_draft(
     if draft.status != "pending":
         raise HTTPException(status_code=400, detail=f"Draft is already {draft.status}, not pending")
 
-    if not is_email_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations.",
-        )
+    identity = await resolve_identity(db, current_user.id)
+    if identity is None:
+        raise HTTPException(status_code=503, detail=_EMAIL_NOT_CONFIGURED_DETAIL)
 
     result = await send_email(
         to_email=draft.to_email,
         subject=draft.subject,
         body_html=_text_to_html(draft.body_text),
         body_text=draft.body_text,
+        identity=identity,
     )
 
     if result.get("success"):
@@ -404,11 +443,9 @@ async def send_all_queued_drafts(
     db: AsyncSession = Depends(get_db),
 ):
     """Send every pending draft. One recipient's failure must not stop the rest."""
-    if not is_email_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations.",
-        )
+    identity = await resolve_identity(db, current_user.id)
+    if identity is None:
+        raise HTTPException(status_code=503, detail=_EMAIL_NOT_CONFIGURED_DETAIL)
 
     result = await db.execute(
         select(Outreach_drafts).where(
@@ -427,6 +464,7 @@ async def send_all_queued_drafts(
                 subject=draft.subject,
                 body_html=_text_to_html(draft.body_text),
                 body_text=draft.body_text,
+                identity=identity,
             )
         except Exception as exc:  # noqa: BLE001 - one bad recipient must not abort the batch
             send_result = {"success": False, "message": str(exc)[:300]}
