@@ -81,6 +81,20 @@ services:
       - key: SMTP_FROM_EMAIL
         sync: false
 
+      # --- Scheduled automations ---
+      # A long random value, e.g. `openssl rand -hex 32`. The SAME value must
+      # be set as a GitHub repository secret named AUTOMATION_CRON_SECRET, so
+      # .github/workflows/run-automations.yml can trigger due automations
+      # hourly. Render's free tier has no cron and sleeps when idle, so
+      # without this nothing fires a schedule and automations only ever run
+      # when a human presses the button.
+      #
+      # Unset, the endpoint returns 401 and nothing runs — the correct
+      # failure. Scheduled runs never send email; they search, qualify and
+      # draft into the approval queue only.
+      - key: AUTOMATION_CRON_SECRET
+        sync: false
+
       # --- Safety rails ---
       # Must not be "dev": the exception handler returns full stack traces when
       # it is.

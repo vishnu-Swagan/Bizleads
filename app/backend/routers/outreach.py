@@ -1,7 +1,9 @@
 """
 BizLeads Outreach Router - PageSpeed audits and email delivery
 """
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
+from models.leads import Leads
+from models.outreach_drafts import Outreach_drafts
 from services.pagespeed import is_pagespeed_configured, audit_website, bulk_audit
 from services.email_sender import is_email_configured, send_email, send_bulk_emails, get_email_config_status
 from services.outreach_composer import compose_many
@@ -234,3 +238,209 @@ async def compose_drafts(
     result["not_found"] = not_found
     result["email_configured"] = is_email_configured()
     return result
+
+
+# --- Draft queue: review, send, or discard what compose/automations produced ---
+#
+# outreach_drafts holds only body_text (see models/outreach_drafts.py) — there
+# is no stored HTML twin. Sending renders a minimal HTML view from the text at
+# send time rather than persisting a second copy that could drift from it.
+
+def _text_to_html(body_text: str) -> str:
+    def esc(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    paragraphs = "".join(
+        "<p>" + esc(part).replace("\n", "<br>") + "</p>"
+        for part in body_text.split("\n\n")
+        if part.strip()
+    )
+    return (
+        '<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
+        'font-size:15px;line-height:1.6;color:#1f2937">' + paragraphs + "</div>"
+    )
+
+
+def _draft_dict(draft: Outreach_drafts, business_name: Optional[str] = None) -> dict:
+    """Serialise a queued draft for the approval UI.
+
+    `based_on` is returned as a JSON STRING, not a parsed array, to match what
+    /compose returns for an unsaved draft. The two shapes existed briefly and
+    the consequence was silent: the client parses this field, so an array
+    arrived as something JSON.parse rejects, the guard caught it, and every
+    queued draft reported "0 measured findings" — telling the user the email
+    was based on nothing when it was based on three. One field, two shapes, no
+    error anywhere.
+
+    `business_name` is joined in by the caller. Without it the queue lists
+    email addresses with no indication of which business each belongs to,
+    which is unusable for reviewing more than a couple at a time.
+    """
+    # Validate rather than pass through: a malformed value should degrade to
+    # an empty list, not reach the browser and break the badge.
+    based_on = "[]"
+    if draft.based_on:
+        try:
+            parsed = json.loads(draft.based_on)
+            if isinstance(parsed, list):
+                based_on = json.dumps(parsed)
+        except (json.JSONDecodeError, ValueError):
+            based_on = "[]"
+
+    return {
+        "id": draft.id,
+        "lead_id": draft.lead_id,
+        "automation_id": draft.automation_id,
+        "business_name": business_name,
+        "to_email": draft.to_email,
+        "subject": draft.subject,
+        "body_text": draft.body_text,
+        "based_on": based_on,
+        "status": draft.status,
+        "sequence_step": draft.sequence_step,
+        "send_error": draft.send_error,
+        "sent_at": draft.sent_at.isoformat() if draft.sent_at else None,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+    }
+
+
+async def _get_owned_draft(db: AsyncSession, draft_id: int, user_id: str) -> Outreach_drafts:
+    result = await db.execute(
+        select(Outreach_drafts).where(Outreach_drafts.id == draft_id, Outreach_drafts.user_id == user_id)
+    )
+    draft = result.scalar_one_or_none()
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return draft
+
+
+@router.get("/queue")
+async def get_outreach_queue(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    skip: int = 0,
+    limit: int = 50,
+):
+    """Pending drafts for the caller, newest first.
+
+    Outer-joined to the lead for its business name. An outer join rather than
+    an inner one on purpose: a lead deleted after its draft was queued must
+    leave the draft visible so the user can discard it, not make it vanish
+    from the queue while still counting as pending.
+    """
+    result = await db.execute(
+        select(Outreach_drafts, Leads.business_name)
+        .outerjoin(Leads, Leads.id == Outreach_drafts.lead_id)
+        .where(Outreach_drafts.user_id == current_user.id, Outreach_drafts.status == "pending")
+        .order_by(Outreach_drafts.id.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.all()
+    return {
+        "items": [_draft_dict(draft, business_name) for draft, business_name in rows],
+        "total": len(rows),
+    }
+
+
+@router.post("/queue/{draft_id}/send")
+async def send_queued_draft(
+    draft_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send one queued draft. The customer is legally the sender under the
+    Terms — this is a human clicking send on a draft they reviewed, never an
+    automatic dispatch."""
+    draft = await _get_owned_draft(db, draft_id, current_user.id)
+    if draft.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Draft is already {draft.status}, not pending")
+
+    if not is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations.",
+        )
+
+    result = await send_email(
+        to_email=draft.to_email,
+        subject=draft.subject,
+        body_html=_text_to_html(draft.body_text),
+        body_text=draft.body_text,
+    )
+
+    if result.get("success"):
+        draft.status = "sent"
+        draft.sent_at = datetime.now(timezone.utc)
+        draft.send_error = None
+    else:
+        draft.status = "failed"
+        draft.send_error = result.get("message", "Failed to send email")
+
+    await db.commit()
+    await db.refresh(draft)
+    return _draft_dict(draft)
+
+
+@router.post("/queue/{draft_id}/discard")
+async def discard_queued_draft(
+    draft_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    draft = await _get_owned_draft(db, draft_id, current_user.id)
+    if draft.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Draft is already {draft.status}, not pending")
+
+    draft.status = "discarded"
+    await db.commit()
+    await db.refresh(draft)
+    return _draft_dict(draft)
+
+
+@router.post("/queue/send-all")
+async def send_all_queued_drafts(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send every pending draft. One recipient's failure must not stop the rest."""
+    if not is_email_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email sending is not configured. Please set up SMTP credentials in Settings > Integrations.",
+        )
+
+    result = await db.execute(
+        select(Outreach_drafts).where(
+            Outreach_drafts.user_id == current_user.id, Outreach_drafts.status == "pending"
+        )
+    )
+    drafts = result.scalars().all()
+
+    sent = 0
+    failed = 0
+    results = []
+    for draft in drafts:
+        try:
+            send_result = await send_email(
+                to_email=draft.to_email,
+                subject=draft.subject,
+                body_html=_text_to_html(draft.body_text),
+                body_text=draft.body_text,
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad recipient must not abort the batch
+            send_result = {"success": False, "message": str(exc)[:300]}
+
+        if send_result.get("success"):
+            draft.status = "sent"
+            draft.sent_at = datetime.now(timezone.utc)
+            draft.send_error = None
+            sent += 1
+        else:
+            draft.status = "failed"
+            draft.send_error = send_result.get("message", "Failed to send email")
+            failed += 1
+        results.append({"id": draft.id, "status": draft.status})
+
+    await db.commit()
+    return {"sent": sent, "failed": failed, "total": len(drafts), "results": results}

@@ -115,3 +115,28 @@ If step 5 returns "No discovery provider connected", `MAPBOX_ACCESS_TOKEN` is mi
 Lead fabrication is structurally impossible: the mock-data seeder and the AI business generator were both deleted, and a test asserts they stay deleted. Every lead comes from a licensed provider.
 
 See `docs/HANDOFF-stop-the-bleeding.md` for everything else still outstanding.
+
+## Scheduled automations
+
+An automation is a saved search that runs on a schedule, saves the new
+businesses it finds, qualifies them, and drafts outreach from what it measured.
+**It never sends.** Drafts land in the approval queue for a human, because the
+customer is the legal sender of every message under the Terms, and unattended
+cold email is how a sending domain gets blacklisted.
+
+Render's free tier has no cron and sleeps when idle, so nothing inside the
+process can wake itself to honour a schedule. `.github/workflows/run-automations.yml`
+calls the API hourly instead. To enable it:
+
+1. Generate a secret: `openssl rand -hex 32`
+2. Render → Environment → add `AUTOMATION_CRON_SECRET` with that value
+3. GitHub → Settings → Secrets and variables → Actions → new repository secret,
+   same name, same value
+
+Until both sides match, the endpoint returns 401 and no schedule fires. Nothing
+else is affected — "Run now" still works from the Automations page, and the
+approval queue behaves normally.
+
+To verify: GitHub → Actions → "Run scheduled automations" → Run workflow. A
+free-tier instance can take about a minute to wake, which the workflow retries
+around.

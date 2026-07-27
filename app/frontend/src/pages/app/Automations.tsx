@@ -8,9 +8,21 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
-import { CheckCircle2, XCircle, Mail, Send, Loader2, ExternalLink, Sparkles } from 'lucide-react';
+import {
+  CheckCircle2, XCircle, Mail, Send, Loader2, ExternalLink, Sparkles,
+  AlertCircle, CalendarClock, Plus, Play, Pencil, Trash2, Inbox, X,
+} from 'lucide-react';
 
 /**
  * Outreach.
@@ -61,6 +73,56 @@ interface EmailStatus {
   missing: string[];
 }
 
+/** A saved scheduled search + qualify + draft pipeline. */
+interface Automation {
+  id: number;
+  name: string;
+  city: string | null;
+  country: string | null;
+  category: string | null;
+  query: string | null;
+  website_state: string | null;
+  auto_qualify: boolean;
+  auto_draft: boolean;
+  max_leads_per_run: number;
+  schedule: 'manual' | 'daily' | 'weekly' | string;
+  enabled: boolean;
+  // All null until the automation has actually run once. A null here is
+  // never rendered as a fabricated "0" or "-" — it means "never run".
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_run_summary: string | null;
+  last_run_error: string | null;
+}
+
+/** A pending draft in the approval queue, awaiting a human Send/Discard. */
+interface QueueItem {
+  id: number;
+  lead_id: number;
+  business_name?: string | null;
+  to_email: string;
+  subject: string;
+  body_text: string;
+  based_on: string;
+  sequence_step?: number;
+  status: string;
+  created_at: string;
+}
+
+const SCHEDULE_LABELS: Record<string, string> = {
+  manual: 'Manual',
+  daily: 'Daily',
+  weekly: 'Weekly',
+};
+
+/** Formats an ISO timestamp for display; never invents a value for a missing one. */
+function formatWhen(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export default function AppAutomations() {
   const { user } = useAuth();
   const [status, setStatus] = useState<EmailStatus | null>(null);
@@ -81,12 +143,286 @@ export default function AppAutomations() {
   const [senderName, setSenderName] = useState('');
   const [senderBusiness, setSenderBusiness] = useState('');
 
+  // Scheduled automations.
+  const [automations, setAutomations] = useState<Automation[]>([]);
+  const [automationsLoading, setAutomationsLoading] = useState(true);
+  const [runningIds, setRunningIds] = useState<Set<number>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [filters, setFilters] = useState<{ countries: string[]; categories: string[] } | null>(null);
+
+  // Create/edit automation form (dialog).
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
+  const [formName, setFormName] = useState('');
+  const [formCity, setFormCity] = useState('');
+  const [formCountry, setFormCountry] = useState('all');
+  const [formCategory, setFormCategory] = useState('all');
+  const [formSchedule, setFormSchedule] = useState<'manual' | 'daily' | 'weekly'>('manual');
+  const [formAutoQualify, setFormAutoQualify] = useState(false);
+  const [formAutoDraft, setFormAutoDraft] = useState(false);
+  const [formMaxLeads, setFormMaxLeads] = useState('10');
+  const [savingAutomation, setSavingAutomation] = useState(false);
+
+  // Approval queue.
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueBusyIds, setQueueBusyIds] = useState<Set<number>>(new Set());
+  const [queueSendingAll, setQueueSendingAll] = useState(false);
+
   useEffect(() => {
     if (user) {
       void loadStatus();
       void loadLeads();
+      void loadAutomations();
+      void loadQueue();
+      void loadFilters();
     }
   }, [user]);
+
+  const loadFilters = async () => {
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/discover/filters', method: 'GET', data: {} });
+      setFilters({ countries: res.data?.countries ?? [], categories: res.data?.categories ?? [] });
+    } catch {
+      setFilters({ countries: [], categories: [] });
+    }
+  };
+
+  const loadAutomations = async () => {
+    setAutomationsLoading(true);
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/automations', method: 'GET', data: {} });
+      setAutomations(Array.isArray(res.data) ? res.data : res.data?.items ?? []);
+    } catch {
+      setAutomations([]);
+    } finally {
+      setAutomationsLoading(false);
+    }
+  };
+
+  const loadQueue = async () => {
+    setQueueLoading(true);
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/outreach/queue', method: 'GET', data: {} });
+      setQueue(Array.isArray(res.data) ? res.data : res.data?.items ?? []);
+    } catch {
+      setQueue([]);
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  /** Describes what an automation searches for, honestly reflecting unset filters. */
+  const automationSummary = (a: Automation) => {
+    const parts = [a.category, a.city, a.country].filter((p): p is string => !!p && p.trim() !== '');
+    if (a.query) parts.push(`"${a.query}"`);
+    return parts.length ? parts.join(' · ') : 'Any business, anywhere';
+  };
+
+  const openCreateForm = () => {
+    setEditingAutomation(null);
+    setFormName('');
+    setFormCity('');
+    setFormCountry('all');
+    setFormCategory('all');
+    setFormSchedule('manual');
+    setFormAutoQualify(false);
+    setFormAutoDraft(false);
+    setFormMaxLeads('10');
+    setFormOpen(true);
+  };
+
+  const openEditForm = (a: Automation) => {
+    setEditingAutomation(a);
+    setFormName(a.name);
+    setFormCity(a.city ?? '');
+    setFormCountry(a.country ?? 'all');
+    setFormCategory(a.category ?? 'all');
+    setFormSchedule((a.schedule as 'manual' | 'daily' | 'weekly') ?? 'manual');
+    setFormAutoQualify(a.auto_qualify);
+    setFormAutoDraft(a.auto_draft);
+    setFormMaxLeads(String(a.max_leads_per_run ?? 10));
+    setFormOpen(true);
+  };
+
+  const saveAutomation = async () => {
+    if (!formName.trim()) {
+      toast.error('Give the automation a name.');
+      return;
+    }
+    const maxLeads = parseInt(formMaxLeads, 10);
+    if (!Number.isFinite(maxLeads) || maxLeads < 1) {
+      toast.error('Max leads per run must be at least 1.');
+      return;
+    }
+
+    setSavingAutomation(true);
+    const payload = {
+      name: formName.trim(),
+      city: formCity.trim() || null,
+      country: formCountry === 'all' ? null : formCountry,
+      category: formCategory === 'all' ? null : formCategory,
+      query: editingAutomation?.query ?? null,
+      website_state: editingAutomation?.website_state ?? 'all',
+      auto_qualify: formAutoQualify,
+      auto_draft: formAutoDraft,
+      max_leads_per_run: maxLeads,
+      schedule: formSchedule,
+      enabled: editingAutomation ? editingAutomation.enabled : true,
+    };
+
+    try {
+      if (editingAutomation) {
+        await client.apiCall.invoke({
+          url: `/api/v1/automations/${editingAutomation.id}`,
+          method: 'PATCH',
+          data: payload,
+        });
+        toast.success('Automation updated');
+      } else {
+        await client.apiCall.invoke({ url: '/api/v1/automations', method: 'POST', data: payload });
+        toast.success('Automation created');
+      }
+      setFormOpen(false);
+      await loadAutomations();
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not save automation');
+    } finally {
+      setSavingAutomation(false);
+    }
+  };
+
+  /** Enable/disable toggle in the list, applied optimistically and rolled back on failure. */
+  const toggleEnabled = async (a: Automation) => {
+    setAutomations((prev) => prev.map((x) => (x.id === a.id ? { ...x, enabled: !x.enabled } : x)));
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/automations/${a.id}`,
+        method: 'PATCH',
+        data: { enabled: !a.enabled },
+      });
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not update automation');
+      setAutomations((prev) => prev.map((x) => (x.id === a.id ? { ...x, enabled: a.enabled } : x)));
+    }
+  };
+
+  const runAutomation = async (a: Automation) => {
+    setRunningIds((prev) => new Set(prev).add(a.id));
+    try {
+      const res = await client.apiCall.invoke({
+        url: `/api/v1/automations/${a.id}/run`,
+        method: 'POST',
+        data: {},
+        options: { timeout: 120000 },
+      });
+      const summary = res.data?.summary ?? res.data?.last_run_summary ?? 'Run complete.';
+      toast.success(summary);
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Run failed');
+    } finally {
+      setRunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(a.id);
+        return next;
+      });
+      await loadAutomations();
+      await loadQueue();
+    }
+  };
+
+  const confirmDeleteAutomation = async () => {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
+    try {
+      await client.apiCall.invoke({ url: `/api/v1/automations/${deleteTarget.id}`, method: 'DELETE', data: {} });
+      setAutomations((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+      toast.success(`Deleted "${deleteTarget.name}"`);
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not delete automation');
+    } finally {
+      setDeletingId(null);
+      setDeleteTarget(null);
+    }
+  };
+
+  const editQueueItem = (id: number, field: 'subject' | 'body_text', value: string) => {
+    setQueue((prev) => prev.map((q) => (q.id === id ? { ...q, [field]: value } : q)));
+  };
+
+  const queueBasedOnCount = (item: QueueItem) => {
+    try {
+      const parsed = JSON.parse(item.based_on || '[]');
+      return Array.isArray(parsed) ? parsed.length : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const sendQueueItem = async (item: QueueItem) => {
+    setQueueBusyIds((prev) => new Set(prev).add(item.id));
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/outreach/queue/${item.id}/send`,
+        method: 'POST',
+        // Send the edited subject/body — sending the original would silently
+        // discard whatever the reviewer just changed.
+        data: { subject: item.subject, body_text: item.body_text },
+      });
+      setQueue((prev) => prev.filter((q) => q.id !== item.id));
+      toast.success(`Sent to ${item.to_email}`);
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Failed to send');
+      setQueueBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const discardQueueItem = async (item: QueueItem) => {
+    setQueueBusyIds((prev) => new Set(prev).add(item.id));
+    try {
+      await client.apiCall.invoke({ url: `/api/v1/outreach/queue/${item.id}/discard`, method: 'POST', data: {} });
+      setQueue((prev) => prev.filter((q) => q.id !== item.id));
+      toast.success('Draft discarded');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Failed to discard');
+      setQueueBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const sendAllQueue = async () => {
+    if (!queue.length) return;
+    setQueueSendingAll(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/outreach/queue/send-all',
+        method: 'POST',
+        data: {},
+        options: { timeout: 120000 },
+      });
+      const sentCount = res.data?.sent ?? res.data?.sent_count;
+      const failedCount = res.data?.failed ?? res.data?.failed_count;
+      if (typeof sentCount === 'number') {
+        if (!failedCount) toast.success(`Sent ${sentCount} email${sentCount === 1 ? '' : 's'}`);
+        else toast.warning(`Sent ${sentCount}, ${failedCount} failed`);
+      } else {
+        toast.success(res.data?.summary ?? 'Sent all pending drafts');
+      }
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not send all drafts');
+    } finally {
+      setQueueSendingAll(false);
+      await loadQueue();
+    }
+  };
 
   /** Only qualified leads can be written to, so only those are offered. */
   const loadLeads = async () => {
@@ -318,6 +654,435 @@ export default function AppAutomations() {
                 <Button variant="outline" size="sm" onClick={loadStatus} className="cursor-pointer">
                   Re-check
                 </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Scheduled automations: repeats Discover (+ optional Qualify/Draft) on a cadence. */}
+        <Card className="border-slate-200">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CalendarClock className="h-4 w-4 text-slate-500" />
+                  Automations
+                </CardTitle>
+                <p className="mt-1 text-sm text-slate-500">
+                  Repeats a Discover search on a schedule, and can optionally qualify and draft outreach
+                  for what it finds.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={openCreateForm}
+                className="bg-indigo-600 hover:bg-indigo-700 gap-1.5 cursor-pointer"
+              >
+                <Plus className="h-4 w-4" />
+                New automation
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {automationsLoading ? (
+              <div className="space-y-2">
+                {[...Array(2)].map((_, i) => (
+                  <Skeleton key={i} className="h-28 rounded-lg" />
+                ))}
+              </div>
+            ) : automations.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center">
+                <CalendarClock className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-sm font-medium text-slate-700">No automations yet</p>
+                <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
+                  An automation repeats a Discover search — daily or weekly — and can optionally qualify
+                  and draft outreach for the leads it finds, so your pipeline fills up without you running
+                  each search by hand. Qualifying spends 1 credit per lead measured; max leads per run caps
+                  how many are pulled and measured each time it runs.
+                </p>
+                <Button
+                  onClick={openCreateForm}
+                  className="mt-4 bg-indigo-600 hover:bg-indigo-700 cursor-pointer"
+                >
+                  Create your first automation
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {automations.map((a) => {
+                  const running = runningIds.has(a.id);
+                  const lastRun = formatWhen(a.last_run_at);
+                  const nextRun = formatWhen(a.next_run_at);
+                  return (
+                    <div key={a.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-slate-900">{a.name}</p>
+                          <p className="truncate text-sm text-slate-500">{automationSummary(a)}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-3">
+                          <Badge variant="outline" className="text-xs border-slate-200">
+                            {SCHEDULE_LABELS[a.schedule] ?? a.schedule}
+                          </Badge>
+                          <label
+                            className="flex cursor-pointer items-center gap-2"
+                            title={a.enabled ? 'Enabled — runs on schedule' : 'Disabled — will not run automatically'}
+                          >
+                            <Switch checked={a.enabled} onCheckedChange={() => toggleEnabled(a)} />
+                            <span className="text-xs text-slate-500">{a.enabled ? 'Enabled' : 'Disabled'}</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="text-sm">
+                        {lastRun ? (
+                          <p className="text-slate-600">
+                            Last run {lastRun}
+                            {a.last_run_summary ? ` · ${a.last_run_summary}` : ''}
+                          </p>
+                        ) : (
+                          <p className="text-slate-500">Never run</p>
+                        )}
+                        {a.schedule !== 'manual' && a.enabled && nextRun && (
+                          <p className="mt-0.5 text-xs text-slate-400">Next run {nextRun}</p>
+                        )}
+                      </div>
+
+                      {a.last_run_error && (
+                        <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                          <span>Last run failed: {a.last_run_error}</span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          onClick={() => runAutomation(a)}
+                          disabled={running}
+                          className="bg-indigo-600 hover:bg-indigo-700 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          {running ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Play className="h-3.5 w-3.5" />
+                          )}
+                          {running ? 'Running...' : 'Run now'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openEditForm(a)}
+                          className="border-slate-200 gap-1.5 cursor-pointer"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setDeleteTarget(a)}
+                          className="border-red-200 text-red-600 hover:bg-red-50 gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Create / edit automation */}
+        <Dialog open={formOpen} onOpenChange={setFormOpen}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{editingAutomation ? 'Edit automation' : 'New automation'}</DialogTitle>
+              <DialogDescription>
+                Runs a Discover search on the schedule you choose. Qualifying and drafting are optional.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="auto-name" className="text-xs font-medium text-slate-600">
+                  Name
+                </Label>
+                <Input
+                  id="auto-name"
+                  placeholder="e.g. Leeds cafes, weekly"
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  className="border-slate-200"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="auto-city" className="text-xs font-medium text-slate-600">
+                  City or area
+                </Label>
+                <Input
+                  id="auto-city"
+                  placeholder="e.g. Leeds"
+                  value={formCity}
+                  onChange={(e) => setFormCity(e.target.value)}
+                  className="border-slate-200"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium text-slate-600">Country</Label>
+                  <Select value={formCountry} onValueChange={setFormCountry}>
+                    <SelectTrigger className="border-slate-200">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Any country</SelectItem>
+                      {filters?.countries.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium text-slate-600">Category</Label>
+                  <Select value={formCategory} onValueChange={setFormCategory}>
+                    <SelectTrigger className="border-slate-200">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Any category</SelectItem>
+                      {filters?.categories.map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-slate-600">Schedule</Label>
+                <Select
+                  value={formSchedule}
+                  onValueChange={(v) => setFormSchedule(v as 'manual' | 'daily' | 'weekly')}
+                >
+                  <SelectTrigger className="border-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual — only runs when you click Run now</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
+                <div className="pr-3">
+                  <p className="text-sm font-medium text-slate-900">Auto-qualify new leads</p>
+                  <p className="text-xs text-slate-500">
+                    Measures each new lead&rsquo;s website before it lands in your pipeline. Spends 1
+                    credit per lead measured.
+                  </p>
+                </div>
+                <Switch
+                  checked={formAutoQualify}
+                  onCheckedChange={(v) => {
+                    setFormAutoQualify(v);
+                    if (!v) setFormAutoDraft(false);
+                  }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
+                <div className="pr-3">
+                  <p className="text-sm font-medium text-slate-900">Auto-draft outreach</p>
+                  <p className="text-xs text-slate-500">
+                    Writes an email from each qualified lead&rsquo;s measured findings. Free — drafts wait
+                    in the approval queue below until you send them. Requires auto-qualify.
+                  </p>
+                </div>
+                <Switch
+                  checked={formAutoDraft}
+                  onCheckedChange={setFormAutoDraft}
+                  disabled={!formAutoQualify}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="auto-max" className="text-xs font-medium text-slate-600">
+                  Max leads per run
+                </Label>
+                <Input
+                  id="auto-max"
+                  type="number"
+                  min={1}
+                  value={formMaxLeads}
+                  onChange={(e) => setFormMaxLeads(e.target.value)}
+                  className="border-slate-200 w-32"
+                />
+                <p className="text-xs text-slate-500">
+                  Caps how many leads this automation pulls — and, if auto-qualify is on, measures — in a
+                  single run. This is both a search-size limit and a credit-spend limit.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setFormOpen(false)}
+                className="border-slate-200 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={saveAutomation}
+                disabled={savingAutomation}
+                className="bg-indigo-600 hover:bg-indigo-700 gap-2 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {savingAutomation && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editingAutomation ? 'Save changes' : 'Create automation'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete confirmation */}
+        <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete &ldquo;{deleteTarget?.name}&rdquo;?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This stops its schedule and removes it. Leads and drafts it already created are not
+                deleted.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDeleteAutomation}
+                disabled={deletingId === deleteTarget?.id}
+                className="bg-red-600 hover:bg-red-700 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {deletingId === deleteTarget?.id ? 'Deleting...' : 'Delete'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Approval queue: drafts an automation wrote, waiting for a human Send/Discard. */}
+        <Card className="border-slate-200">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Inbox className="h-4 w-4 text-slate-500" />
+                  Approval queue
+                </CardTitle>
+                <p className="mt-1 text-sm text-slate-500">
+                  Drafts your automations wrote. Nothing here sends itself — review, edit if needed, then
+                  send or discard.
+                </p>
+              </div>
+              {queue.length > 0 && (
+                <Button
+                  onClick={sendAllQueue}
+                  disabled={queueSendingAll || !status?.configured}
+                  className="bg-indigo-600 hover:bg-indigo-700 gap-2 cursor-pointer disabled:cursor-not-allowed"
+                  title={!status?.configured ? 'Configure email delivery above first' : undefined}
+                >
+                  {queueSendingAll ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  {queueSendingAll ? 'Sending...' : `Send all ${queue.length}`}
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {queueLoading ? (
+              <div className="space-y-2">
+                {[...Array(2)].map((_, i) => (
+                  <Skeleton key={i} className="h-40 rounded-lg" />
+                ))}
+              </div>
+            ) : queue.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center">
+                <Inbox className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-sm font-medium text-slate-700">Nothing waiting for review</p>
+                <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
+                  Turn on auto-draft on an automation above, or draft manually from &ldquo;Draft from
+                  findings&rdquo; below — every draft lands here first, so nothing is ever sent without
+                  your review.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {queue.map((item) => {
+                  const busy = queueBusyIds.has(item.id);
+                  const basedOnCount = queueBasedOnCount(item);
+                  return (
+                    <div key={item.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">
+                            {item.business_name || `Lead #${item.lead_id}`}
+                          </p>
+                          <p className="truncate text-xs text-slate-500">{item.to_email}</p>
+                        </div>
+                        <Badge variant="outline" className="shrink-0 text-xs border-slate-200">
+                          from {basedOnCount} measured finding{basedOnCount === 1 ? '' : 's'}
+                        </Badge>
+                      </div>
+                      <Input
+                        value={item.subject}
+                        onChange={(e) => editQueueItem(item.id, 'subject', e.target.value)}
+                        disabled={busy}
+                        className="border-slate-200 font-medium"
+                      />
+                      <Textarea
+                        rows={7}
+                        value={item.body_text}
+                        onChange={(e) => editQueueItem(item.id, 'body_text', e.target.value)}
+                        disabled={busy}
+                        className="border-slate-200 text-sm"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => sendQueueItem(item)}
+                          disabled={busy || !status?.configured}
+                          className="bg-indigo-600 hover:bg-indigo-700 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                          title={!status?.configured ? 'Configure email delivery above first' : undefined}
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Send className="h-3.5 w-3.5" />
+                          )}
+                          {busy ? 'Sending...' : 'Send'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => discardQueueItem(item)}
+                          disabled={busy}
+                          className="border-slate-200 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          Discard
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </CardContent>

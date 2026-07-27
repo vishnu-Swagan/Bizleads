@@ -1,0 +1,64 @@
+# Fires scheduled automations.
+#
+# Why this exists: the API runs on Render's free tier, which sleeps after
+# inactivity and offers no cron. Nothing inside the process can reliably wake
+# itself, so `next_run_at` would pass unnoticed and an "automation" would only
+# ever run when someone pressed a button — which is not automation.
+#
+# GitHub Actions cron is free, runs whether or not anyone is logged in, and
+# already has a trust relationship with this repository. It calls one endpoint;
+# all the logic stays in the application.
+#
+# Setup (one time):
+#   1. Add a long random value as AUTOMATION_CRON_SECRET in the Render
+#      dashboard, e.g. `openssl rand -hex 32`.
+#   2. Add the SAME value as a repository secret named AUTOMATION_CRON_SECRET
+#      under Settings → Secrets and variables → Actions.
+#   3. Optionally set the API_BASE_URL repository variable if the API moves.
+#
+# Without the secret set on both sides the endpoint returns 401 and nothing
+# runs — which is the correct failure. It never sends email; it only searches,
+# qualifies and drafts into the approval queue.
+
+name: Run scheduled automations
+
+on:
+  schedule:
+    # Hourly, on the hour. Automations are daily or weekly, so hourly
+    # granularity is ample and keeps the free-tier service warm enough to
+    # answer without a cold-start timeout.
+    - cron: '0 * * * *'
+  workflow_dispatch: {} # so it can be triggered by hand to test
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger due automations
+        env:
+          SECRET: ${{ secrets.AUTOMATION_CRON_SECRET }}
+          API: ${{ vars.API_BASE_URL || 'https://bizleads.onrender.com' }}
+        run: |
+          if [ -z "$SECRET" ]; then
+            echo "AUTOMATION_CRON_SECRET is not set — skipping."
+            echo "Add it to repository secrets to enable scheduled runs."
+            exit 0
+          fi
+
+          # A free-tier instance can take ~60s to wake. Retry rather than
+          # skipping the hour on a cold start.
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /tmp/out.json -w '%{http_code}' \
+              --max-time 240 \
+              -X POST "$API/api/v1/automations/run-scheduled" \
+              -H "X-Automation-Secret: $SECRET")
+
+            if [ "$code" = "200" ]; then
+              echo "OK:"; cat /tmp/out.json; exit 0
+            fi
+            echo "Attempt $attempt returned HTTP $code"
+            [ "$code" = "401" ] && { echo "Secret rejected — check both sides match."; exit 1; }
+            sleep 30
+          done
+
+          echo "Failed after 3 attempts."; cat /tmp/out.json || true; exit 1
