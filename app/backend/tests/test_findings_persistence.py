@@ -58,7 +58,7 @@ def _stub_qualify(monkeypatch, **result):
     }
     payload.update(result)
 
-    async def fake(url):
+    async def fake(url, **kwargs):
         return payload
 
     monkeypatch.setattr(discover, "qualify_website", fake)

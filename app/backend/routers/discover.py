@@ -3,6 +3,7 @@ BizLeads Discovery Router - Job-based async search with credit metering
 """
 import json
 import logging
+from time import monotonic
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -329,6 +330,12 @@ async def get_discovery_filters():
 # Each lead qualified makes at least one outbound request. A generous batch
 # would let one call fan out into hundreds of fetches against third parties.
 MAX_QUALIFY_BATCH = 10
+
+# How long a single Qualify request may spend on deep PageSpeed audits before
+# the rest of the batch falls back to the free heuristic tier. Chosen well
+# under the client's 120s timeout so a large batch returns a complete, honest
+# result instead of failing after the credits were already charged.
+AUDIT_BUDGET_SECONDS = 70.0
 CREDITS_PER_QUALIFICATION = 1
 
 
@@ -379,6 +386,8 @@ async def qualify_leads(
     results = []
     not_found = []
     charged = 0
+    started_at = monotonic()
+    audits_skipped = 0
 
     for lead_id in data.lead_ids:
         lead = await service.get_by_id(lead_id, user_id=str(current_user.id))
@@ -388,7 +397,16 @@ async def qualify_leads(
             not_found.append(lead_id)
             continue
 
-        measurement = await qualify_website(lead.website_url)
+        # PageSpeed renders the page, so it costs 10-20s per lead. Ten leads
+        # would run for minutes while the browser gives up after two, and the
+        # user would see a timeout having already been charged. The batch
+        # therefore audits only while the budget lasts and drops to the free
+        # heuristic tier afterwards — evidence_tier records which produced
+        # each score, so the result stays honest rather than silently weaker.
+        within_budget = (monotonic() - started_at) < AUDIT_BUDGET_SECONDS
+        measurement = await qualify_website(lead.website_url, allow_audit=within_budget)
+        if not within_budget:
+            audits_skipped += 1
         charged += CREDITS_PER_QUALIFICATION
 
         scored = build_score_breakdown(

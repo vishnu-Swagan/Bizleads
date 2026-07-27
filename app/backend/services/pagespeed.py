@@ -9,13 +9,28 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-PAGESPEED_API_KEY = os.environ.get("PAGESPEED_API_KEY")
+def _api_key() -> str:
+    """Read the key at call time, never at import.
+
+    As a module constant this was captured once when the process started,
+    which put it out of reach of a .env loaded later and of any test that
+    sets it. The same pattern has already caused two production bugs in this
+    codebase (the MapBox token and the SMTP credentials).
+    """
+    return os.environ.get("PAGESPEED_API_KEY", "").strip()
+
+
+# PageSpeed genuinely renders the page, so it is slow — commonly 10-20s, and
+# occasionally far worse. 60s was too generous once qualification runs it per
+# lead: ten leads could occupy ten minutes while the browser gave up at two.
+# A request that has not answered in 30s is not going to rescue the batch.
+AUDIT_TIMEOUT_SECONDS = 30.0
 PAGESPEED_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 
 
 def is_pagespeed_configured() -> bool:
     """Check if PageSpeed Insights API key is available."""
-    return bool(PAGESPEED_API_KEY)
+    return bool(_api_key())
 
 
 async def audit_website(url: str, strategy: str = "mobile") -> Optional[dict]:
@@ -29,7 +44,7 @@ async def audit_website(url: str, strategy: str = "mobile") -> Optional[dict]:
     Returns:
         Dict with performance metrics or None if audit fails
     """
-    if not PAGESPEED_API_KEY:
+    if not _api_key():
         logger.warning("PageSpeed API key not configured")
         return None
 
@@ -42,13 +57,13 @@ async def audit_website(url: str, strategy: str = "mobile") -> Optional[dict]:
 
     params = {
         "url": url,
-        "key": PAGESPEED_API_KEY,
+        "key": _api_key(),
         "strategy": strategy,
         "category": ["performance", "accessibility", "seo", "best-practices"],
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=AUDIT_TIMEOUT_SECONDS) as client:
             response = await client.get(PAGESPEED_URL, params=params)
 
             if response.status_code != 200:

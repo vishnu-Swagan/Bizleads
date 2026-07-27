@@ -64,11 +64,19 @@ def _blend_audit_scores(audit: Dict[str, Any]) -> Optional[int]:
     return round(total / weight_used)
 
 
-async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
+async def qualify_website(raw_url: Optional[str], *, allow_audit: bool = True) -> Dict[str, Any]:
     """Measure one candidate website. Never guesses.
 
     Returns the fields a lead needs to become rankable, plus the evidence that
     produced them so a user can disagree with it.
+
+    `allow_audit=False` skips the PageSpeed call and settles for the free
+    heuristic tier. Callers use it to stay inside a time budget: PageSpeed
+    renders the page and commonly takes 10-20 seconds, so a batch of ten runs
+    for minutes while the browser gives up after two. Degrading to the
+    heuristic is honest rather than lossy — `evidence_tier` on the result
+    records which tier produced the score, so nobody is misled about how much
+    to trust it.
     """
     check = await check_website(raw_url)
 
@@ -146,7 +154,7 @@ async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
         result["evidence"]["quality_note"] = "Site responded but returned no readable HTML"
 
     audit = None
-    if is_pagespeed_configured():
+    if is_pagespeed_configured() and allow_audit:
         audit = await audit_website(check["final_url"] or raw_url or "")
 
     if audit and not audit.get("error"):

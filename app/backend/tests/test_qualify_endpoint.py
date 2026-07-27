@@ -55,7 +55,11 @@ def _stub_qualify(monkeypatch, **result):
     }
     payload.update(result)
 
-    async def fake(url):
+    # **kwargs so the stub keeps matching qualify_website as it gains
+    # keyword-only options (allow_audit, and whatever follows). A stub with a
+    # frozen signature turns every future parameter into eleven unrelated
+    # test failures that say nothing about the change.
+    async def fake(url, **kwargs):
         return payload
 
     monkeypatch.setattr(discover, "qualify_website", fake)
