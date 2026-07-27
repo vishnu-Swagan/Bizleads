@@ -153,7 +153,11 @@ async def send_email(
         return {
             "success": False,
             "error": "auth_failed",
-            "message": "SMTP authentication failed. Check your username and password (use App Password for Gmail).",
+            # Gmail returns one opaque rejection for every credential problem,
+            # so the useful diagnosis has to come from inspecting what was
+            # actually configured. "Check your username and password" sends
+            # people round in circles re-typing a correct password.
+            "message": diagnose_auth_failure(),
         }
     except smtplib.SMTPRecipientsRefused as e:
         logger.error(f"Recipient refused: {e}")
@@ -279,3 +283,62 @@ def get_email_config_status() -> dict:
             if not value
         ],
     }
+
+
+# Google shows App Passwords as four groups of four, e.g. "abcd efgh ijkl mnop".
+GMAIL_APP_PASSWORD_LENGTH = 16
+
+
+def diagnose_auth_failure() -> str:
+    """Explain a rejected login from what is actually configured.
+
+    Gmail answers every credential problem with the same opaque error, so the
+    generic "check your username and password" is close to useless — the
+    password is usually right, it is simply the wrong KIND of password. These
+    checks name the specific mistake instead.
+    """
+    c = _config()
+    host = (c["host"] or "").lower()
+    username, password = c["username"], c["password"]
+    is_google = "gmail" in host or "google" in host
+
+    problems = []
+
+    if username and "@" not in username:
+        problems.append(
+            f"SMTP_USERNAME is '{username}', which is not a full email address. "
+            "It must be the whole address, e.g. you@gmail.com."
+        )
+
+    if is_google and password and len(password) != GMAIL_APP_PASSWORD_LENGTH:
+        problems.append(
+            f"SMTP_PASSWORD is {len(password)} characters. A Gmail App Password is "
+            f"exactly {GMAIL_APP_PASSWORD_LENGTH} letters (Google displays it as four "
+            "groups of four; spaces are stripped automatically). A password of any "
+            "other length is almost certainly your normal account password, which "
+            "Gmail always rejects for SMTP."
+        )
+
+    if is_google and username and c["from_email"] and username.lower() != c["from_email"].lower():
+        problems.append(
+            f"SMTP_USERNAME ({username}) and SMTP_FROM_EMAIL ({c['from_email']}) differ. "
+            "Gmail only lets you send as the account you authenticated with, unless the "
+            "address is a verified alias."
+        )
+
+    if problems:
+        return "Gmail rejected the login. " + " ".join(problems)
+
+    if is_google:
+        return (
+            "Gmail rejected the login, and the settings look superficially correct. "
+            "The usual causes are: the App Password was created on a different Google "
+            "account than SMTP_USERNAME; 2-Step Verification was turned off afterwards, "
+            "which revokes every App Password; or the App Password was revoked. "
+            "Create a fresh one at https://myaccount.google.com/apppasswords and try again."
+        )
+
+    return (
+        "The mail server rejected the login. Check the username and password for "
+        f"{c['host'] or 'the SMTP host'}, and that the account permits SMTP access."
+    )

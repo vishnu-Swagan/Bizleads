@@ -95,3 +95,56 @@ async def test_an_invalid_recipient_is_refused_before_connecting(monkeypatch):
 
     assert result["success"] is False
     assert result["error"] == "invalid_recipient"
+
+
+class TestAuthFailureDiagnosis:
+    """Gmail answers every credential problem with one opaque rejection.
+
+    "Check your username and password" is close to useless against that: the
+    password is usually correct, it is simply the wrong KIND of password.
+    These tests keep the specific diagnosis honest.
+    """
+
+    def test_an_account_password_is_identified_by_length(self, monkeypatch):
+        _configure(monkeypatch, SMTP_PASSWORD="MyRealPassword123!")
+
+        message = email_sender.diagnose_auth_failure()
+
+        assert "18 characters" in message
+        assert "App Password" in message
+
+    def test_a_correct_length_app_password_is_not_blamed(self, monkeypatch):
+        _configure(monkeypatch, SMTP_PASSWORD="abcdefghijklmnop")
+
+        message = email_sender.diagnose_auth_failure()
+
+        assert "characters" not in message
+        assert "apppasswords" in message, "should point at creating a fresh one"
+
+    def test_spaces_do_not_make_a_valid_app_password_look_wrong(self, monkeypatch):
+        """Google displays App Passwords with spaces; they are not part of it."""
+        _configure(monkeypatch, SMTP_PASSWORD="abcd efgh ijkl mnop")
+
+        assert "characters" not in email_sender.diagnose_auth_failure()
+
+    def test_a_username_that_is_not_an_address_is_named(self, monkeypatch):
+        _configure(monkeypatch, SMTP_USERNAME="vishnu")
+
+        message = email_sender.diagnose_auth_failure()
+
+        assert "not a full email address" in message
+
+    def test_a_sender_mismatch_is_named(self, monkeypatch):
+        _configure(monkeypatch, SMTP_USERNAME="me@gmail.com",
+                   SMTP_FROM_EMAIL="someone-else@gmail.com")
+
+        assert "differ" in email_sender.diagnose_auth_failure()
+
+    def test_a_non_gmail_host_gets_generic_advice(self, monkeypatch):
+        """Length rules are Gmail's; other providers must not be misdiagnosed."""
+        _configure(monkeypatch, SMTP_HOST="smtp.mailgun.org", SMTP_PASSWORD="short")
+
+        message = email_sender.diagnose_auth_failure()
+
+        assert "App Password" not in message
+        assert "smtp.mailgun.org" in message
