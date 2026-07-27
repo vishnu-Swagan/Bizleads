@@ -150,8 +150,7 @@ export default function Terms() {
 
         <h3>7.1 How your card is handled</h3>
         <p>
-          Payments are processed by <strong>Stripe Payments Europe, Ltd.</strong> and its
-          affiliates. <strong>We never see or store your full card number.</strong> Card details
+          Payments are processed by <strong>Stripe, Inc.</strong> and its affiliates. <strong>We never see or store your full card number.</strong> Card details
           are submitted directly to Stripe, which is certified to PCI-DSS Level 1. We receive only
           a payment token, the card brand, its last four digits and its expiry date, so we can show
           you which card is on file and take renewal payments.
@@ -208,19 +207,24 @@ export default function Terms() {
           have made an error.
         </p>
         <p>
+          There is no statutory cooling-off period for digital services in the United States, and
+          the free trial exists so you can evaluate the service before paying anything.
+        </p>
+        <p>
           <strong>Consumers in the UK and EU</strong> have a statutory 14-day right to cancel a
-          distance contract. Because the service is supplied digitally and immediately, by
-          subscribing you ask us to begin supply at once and acknowledge that you lose that right
-          once supply has begun. This does not affect your rights where the service is faulty or
-          not as described. Most customers subscribe as a business and this right does not apply
-          to them.
+          distance contract, which applies even though we are established in the United States.
+          Because the service is supplied digitally and immediately, by subscribing you ask us to
+          begin supply at once and acknowledge that you lose that right once supply has begun.
+          This does not affect your rights where the service is faulty or not as described. Most
+          customers subscribe as a business, to whom the right does not apply.
         </p>
 
         <h3>7.7 Tax</h3>
         <p>
-          Prices are exclusive of VAT and any other applicable sales tax, which is added at
-          checkout based on your billing location. Where you supply a valid VAT number, the
-          reverse charge may apply.
+          Prices are in US dollars and exclusive of tax. Any US state sales tax, UK/EU VAT or
+          other applicable tax is calculated at checkout based on your billing location. Where
+          you are a UK or EU business supplying a valid VAT number, the reverse charge may apply
+          and no VAT is added.
         </p>
       </section>
 
@@ -286,9 +290,14 @@ export default function Terms() {
       <section>
         <h2 id="law">13. Governing law</h2>
         <p>
-          These Terms are governed by the law of {LEGAL.jurisdiction}, and its courts have
-          exclusive jurisdiction. If you are a consumer, you keep the protection of mandatory law
-          in your country of residence.
+          These Terms are governed by the laws of {LEGAL.jurisdiction}, without regard to its
+          conflict-of-law rules. The state and federal courts located in Fayette County, Kentucky
+          have jurisdiction over disputes arising from them.
+        </p>
+        <p>
+          If you are a consumer resident in the UK, the EU or elsewhere, this does not deprive you
+          of the protection of mandatory consumer law in your country of residence, or of the
+          right to bring proceedings in your local courts where that law gives you one.
         </p>
       </section>
 

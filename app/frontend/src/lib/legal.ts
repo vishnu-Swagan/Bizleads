@@ -24,20 +24,49 @@ export const LEGAL = {
    */
   entity: 'Torque Trends LLC',
 
-  /** TODO: company registration number, if incorporated. */
-  companyNumber: '[TODO: company number]',
+  /**
+   * Kentucky Secretary of State organisation number.
+   *
+   * TODO: still required. Both the Terms and the Privacy Policy render this
+   * conditionally, so setting it to '' removes the clause cleanly rather than
+   * printing a blank — but a contract that identifies the entity by number is
+   * materially easier to enforce than one that does not.
+   */
+  companyNumber: '[TODO: KY organisation number]',
 
-  /** TODO: registered office address — required by UK/EU GDPR Art. 13(1)(a). */
-  address: '[TODO: registered office address]',
+  /** Registered address. Required by GDPR Art. 13(1)(a) as controller identity. */
+  address: '271 W Short St, Ste 410 #2463, Lexington, KY 40507, United States',
 
-  /** TODO: the jurisdiction whose law governs the contract. */
-  jurisdiction: '[TODO: e.g. England and Wales]',
+  /** Governing law. Kentucky is a Commonwealth, hence the formal styling. */
+  jurisdiction: 'the Commonwealth of Kentucky, United States',
 
   /** General support enquiries. */
-  supportEmail: '[TODO: support@yourdomain.com]',
+  supportEmail: 'support@torquetrendsllc.co.site',
 
-  /** Data-protection enquiries and data-subject requests. */
-  privacyEmail: '[TODO: privacy@yourdomain.com]',
+  /**
+   * Data-protection enquiries and data-subject requests.
+   *
+   * Currently the same mailbox as support. That is lawful — GDPR requires a
+   * reachable contact, not a dedicated one — but privacy@ on the same domain
+   * separates statutory requests, which carry a one-month deadline, from
+   * ordinary support traffic where they are easy to lose.
+   */
+  privacyEmail: 'support@torquetrendsllc.co.site',
+
+  /**
+   * UK/EU representative under GDPR Art. 27.
+   *
+   * TODO: a genuine appointment is required, not a placeholder. A controller
+   * established outside the UK/EU that offers services to people there must
+   * designate a representative IN WRITING inside those territories and name
+   * them in this policy. Torque Trends LLC is Kentucky-based, stores customer
+   * data in London and Frankfurt, and its policies commit to UK/EU GDPR, so
+   * the Art. 27(2) exemption for occasional low-risk processing is unlikely to
+   * apply to continuous SaaS storage.
+   *
+   * Set to '' once appointed, or supply the name and address.
+   */
+  euRepresentative: '[TODO: appoint a UK/EU representative — GDPR Art. 27]',
 
   /** Last substantive revision of the policies. */
   lastUpdated: '26 July 2026',

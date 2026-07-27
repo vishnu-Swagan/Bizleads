@@ -107,9 +107,11 @@ export default function Privacy() {
           <strong>Frankfurt, Germany</strong>.
         </p>
         <p>
-          Some processors are based in the United States. Those transfers are covered by the UK
-          International Data Transfer Addendum and the EU Standard Contractual Clauses, together
-          with the additional safeguards those instruments require.
+          {LEGAL.entity} is established in the United States, so your data is accessible from
+          there for support and administration even though it is stored in the UK and EU. Several
+          of our processors are also US-based. These transfers are covered by the UK International
+          Data Transfer Addendum and the EU Standard Contractual Clauses, together with the
+          additional safeguards those instruments require.
         </p>
       </section>
 
@@ -211,6 +213,45 @@ export default function Privacy() {
           You may also complain to a supervisory authority. In the UK that is the Information
           Commissioner&rsquo;s Office (<a href="https://ico.org.uk">ico.org.uk</a>); in the EU it
           is the authority where you live or work.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="representative">8a. UK and EU representative</h2>
+        <p>
+          {LEGAL.entity} is established in the United States. Where we offer this service to
+          people in the UK or EU, Article 27 of the UK and EU GDPR requires us to designate a
+          representative in those territories, who may be contacted by data subjects and
+          supervisory authorities on all matters relating to processing.
+        </p>
+        <p>
+          <strong>Our representative:</strong> {LEGAL.euRepresentative}
+        </p>
+        <p>
+          Contacting the representative does not replace your right to contact us directly at{' '}
+          <a href={`mailto:${LEGAL.privacyEmail}`}>{LEGAL.privacyEmail}</a>, or to complain to
+          your own supervisory authority.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="us-rights">8b. United States privacy rights</h2>
+        <p>
+          Some US states — California, Colorado, Connecticut, Virginia and others — give residents
+          rights over their personal information, including rights to know what is collected, to
+          delete it, to correct it, and to opt out of its sale or of targeted advertising.
+        </p>
+        <p>
+          <strong>We do not sell or share personal information</strong> as those terms are defined
+          under the California Consumer Privacy Act, and we do not use it for targeted advertising
+          or profiling. We run no advertising or analytics of any kind.
+        </p>
+        <p>
+          Whether a given state law applies to us depends on thresholds most small businesses do
+          not meet. Regardless of whether we are strictly covered, we honour access, correction
+          and deletion requests from US residents on the same terms as those described in clause
+          8. Email <a href={`mailto:${LEGAL.privacyEmail}`}>{LEGAL.privacyEmail}</a>, and we will
+          not discriminate against you for asking.
         </p>
       </section>
 
