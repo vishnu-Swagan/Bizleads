@@ -12,8 +12,9 @@ export default function Privacy() {
         <h2 id="controller">1. Who is responsible</h2>
         <p>
           {LEGAL.entity}, of {LEGAL.address}
-          {LEGAL.companyNumber ? ` (company number ${LEGAL.companyNumber})` : ''}, is the
-          controller of personal data described in this policy.
+          {LEGAL.companyNumber ? ` (registration number ${LEGAL.companyNumber})` : ''}, is the
+          controller of personal data described in this policy. {LEGAL.entity} operates{' '}
+          {LEGAL.product} as a trading name.
         </p>
         <p>
           Data-protection enquiries:{' '}

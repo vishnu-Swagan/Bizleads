@@ -13,8 +13,10 @@ export default function Terms() {
         <p>
           These Terms are a contract between you (&ldquo;you&rdquo;, &ldquo;the
           customer&rdquo;) and {LEGAL.entity}, registered at {LEGAL.address}
-          {LEGAL.companyNumber ? `, company number ${LEGAL.companyNumber}` : ''} (&ldquo;we&rdquo;,
-          &ldquo;us&rdquo;). They govern your use of {LEGAL.product} at{' '}
+          {LEGAL.companyNumber ? `, registration number ${LEGAL.companyNumber}` : ''}{' '}
+          (&ldquo;we&rdquo;, &ldquo;us&rdquo;). {LEGAL.entity} operates {LEGAL.product},
+          which is a trading name; your contract is with {LEGAL.entity}. They govern your
+          use of {LEGAL.product} at{' '}
           <a href={LEGAL.siteUrl}>{LEGAL.siteUrl.replace('https://', '')}</a>.
         </p>
         <p>
