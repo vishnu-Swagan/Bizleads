@@ -63,7 +63,7 @@ interface Lead {
 }
 
 interface EmailStatus {
-  provider?: 'smtp' | 'resend';
+  provider?: 'smtp' | 'resend' | 'mailercloud';
   configured: boolean;
   host: string | null;
   port: number;
@@ -632,7 +632,11 @@ export default function AppAutomations() {
                 </Badge>
                 <span className="text-sm text-slate-600">
                   Sending as <strong className="text-slate-900">{status.from_email}</strong> via{' '}
-                  {status.provider === 'resend' ? 'Resend' : `${status.host}:${status.port}`}
+                  {status.provider === 'mailercloud'
+                    ? 'Mailercloud'
+                    : status.provider === 'resend'
+                      ? 'Resend'
+                      : `${status.host}:${status.port}`}
                 </span>
               </div>
             ) : (
@@ -666,7 +670,25 @@ export default function AppAutomations() {
 
                 {/* The single most common setup failure, answered inline. */}
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                  {status?.provider === 'resend' ? (
+                  {status?.provider === 'mailercloud' ? (
+                    <>
+                      <p className="font-medium text-slate-900">Using Mailercloud</p>
+                      <ol className="mt-2 list-decimal space-y-1.5 pl-5">
+                        <li>
+                          Set your API key as <code className="text-xs">MAILERCLOUD_API_KEY</code>{' '}
+                          in Render.
+                        </li>
+                        <li>
+                          Verify your sending domain or sender address in the Mailercloud
+                          dashboard. An unverified sender is refused on every send.
+                        </li>
+                        <li>
+                          Set <code className="text-xs">MAILERCLOUD_FROM_EMAIL</code> to that
+                          verified address.
+                        </li>
+                      </ol>
+                    </>
+                  ) : status?.provider === 'resend' ? (
                     <>
                       <p className="font-medium text-slate-900">Using Resend</p>
                       <ol className="mt-2 list-decimal space-y-1.5 pl-5">

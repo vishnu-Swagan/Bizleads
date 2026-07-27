@@ -9,6 +9,8 @@ A bad SMTP_PORT was worse than it looks. int("") raised ValueError during
 import, and main.py's router auto-loader swallows import errors as a warning,
 so one typo silently removed every outreach endpoint from the running app.
 """
+import json
+
 import pytest
 
 from services import email_sender
@@ -246,3 +248,98 @@ class TestResendErrors:
     async def test_rate_limiting_is_distinguished(self, monkeypatch):
         result = await self._send_with(monkeypatch, 429, {})
         assert result["error"] == "rate_limited"
+
+
+class TestMailercloud:
+    """Mailercloud has two traps worth pinning down.
+
+    The API key goes in the Authorization header VERBATIM — a "Bearer "
+    prefix, which almost every other API wants, is silently rejected. And the
+    API answers HTTP 200 with {"status": "ERROR"} for at least some failures,
+    so treating any 2xx as delivered would report sends that never happened.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        for var in ("RESEND_API_KEY", "EMAIL_PROVIDER"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("MAILERCLOUD_API_KEY", "mc_live_key")
+        monkeypatch.setenv("MAILERCLOUD_FROM_EMAIL", "hello@torquetrendsllc.co.site")
+
+    async def _send(self, monkeypatch, status, body, capture=None):
+        import httpx
+
+        def handler(request):
+            if capture is not None:
+                capture["headers"] = dict(request.headers)
+                capture["body"] = json.loads(request.content)
+            return httpx.Response(status, json=body)
+
+        original = httpx.AsyncClient
+        transport = httpx.MockTransport(handler)
+        monkeypatch.setattr(
+            email_sender.httpx, "AsyncClient",
+            lambda *a, **k: original(*a, **{**k, "transport": transport}),
+        )
+        return await email_sender.send_email(
+            "owner@business.com", "Your site on a phone", "<p>Hi</p>", "Hi"
+        )
+
+    def test_a_key_selects_it_over_smtp(self):
+        assert email_sender.active_provider() == "mailercloud"
+
+    @pytest.mark.asyncio
+    async def test_a_successful_send(self, monkeypatch):
+        result = await self._send(
+            monkeypatch, 200, {"status": "SUCCESS", "statusCode": 1000, "message": "NA"}
+        )
+        assert result["success"] is True
+        assert result["provider"] == "mailercloud"
+
+    @pytest.mark.asyncio
+    async def test_the_key_is_sent_without_a_bearer_prefix(self, monkeypatch):
+        """This API wants the raw key. 'Bearer ' is a silent 401."""
+        capture: dict = {}
+        await self._send(monkeypatch, 200, {"status": "SUCCESS"}, capture)
+
+        assert capture["headers"]["authorization"] == "mc_live_key"
+
+    @pytest.mark.asyncio
+    async def test_the_payload_matches_the_documented_shape(self, monkeypatch):
+        capture: dict = {}
+        await self._send(monkeypatch, 200, {"status": "SUCCESS"}, capture)
+        body = capture["body"]
+
+        assert body["version"] == "1.0"
+        assert body["email"]["from"] == "hello@torquetrendsllc.co.site"
+        assert body["email"]["subject"] == "Your site on a phone"
+        assert body["email"]["recipients"]["to"] == [{"email": "owner@business.com"}]
+        assert body["email"]["text"] == "Hi", "text part improves deliverability"
+        assert body["email"]["html"] == "<p>Hi</p>"
+
+    @pytest.mark.asyncio
+    async def test_an_error_body_on_http_200_is_not_treated_as_sent(self, monkeypatch):
+        """The failure that would quietly lose every email."""
+        result = await self._send(
+            monkeypatch, 200,
+            {"status": "ERROR", "statusCode": 9022, "message": "Unsupported version"},
+        )
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_an_unverified_sender_is_named_as_such(self, monkeypatch):
+        result = await self._send(
+            monkeypatch, 400,
+            {"status": "ERROR", "statusCode": 9001, "message": "Sender domain not verified"},
+        )
+        assert result["error"] == "invalid_sender"
+        assert "hello@torquetrendsllc.co.site" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_bad_key_is_named_as_such(self, monkeypatch):
+        result = await self._send(monkeypatch, 401, {"message": "Invalid API key"})
+        assert result["error"] == "auth_failed"
+        assert "Bearer" in result["message"], "should warn about the prefix mistake"
+
+    def test_the_api_key_never_reaches_the_browser(self):
+        assert "mc_live_key" not in str(email_sender.get_email_config_status())

@@ -63,6 +63,109 @@ def _config() -> dict:
 
 RESEND_ENDPOINT = "https://api.resend.com/emails"
 
+# Verified against apidoc.mailercloud.com/api-reference/email/send-email.
+# Note the auth header carries the key verbatim — no "Bearer " prefix, unlike
+# most APIs. Sending one is a silent 401.
+MAILERCLOUD_ENDPOINT = "https://email-api.mailercloud.com/email"
+# "1.0" is HTML-only; "2.0" exists solely for AMP email, which this does not send.
+MAILERCLOUD_VERSION = "1.0"
+
+
+def _mailercloud_config() -> dict:
+    return {
+        "api_key": os.environ.get("MAILERCLOUD_API_KEY", "").strip(),
+        "from_email": (
+            os.environ.get("MAILERCLOUD_FROM_EMAIL")
+            or os.environ.get("SMTP_FROM_EMAIL", "")
+        ).strip(),
+        "from_name": os.environ.get("MAILERCLOUD_FROM_NAME", "").strip(),
+    }
+
+
+async def _send_via_mailercloud(
+    to_email: str,
+    subject: str,
+    body_html: str,
+    body_text: Optional[str],
+    reply_to: Optional[str],
+    cc: Optional[list[str]],
+    bcc: Optional[list[str]],
+) -> dict:
+    """Send through Mailercloud's transactional API."""
+    m = _mailercloud_config()
+
+    recipients: dict = {"to": [{"email": to_email}]}
+    if cc:
+        recipients["cc"] = [{"email": address} for address in cc]
+    if bcc:
+        recipients["bcc"] = [{"email": address} for address in bcc]
+
+    email: dict = {
+        "from": m["from_email"],
+        "subject": subject,
+        "html": body_html,
+        "recipients": recipients,
+    }
+    if m["from_name"]:
+        email["fromName"] = m["from_name"]
+    if body_text:
+        # Both parts are sent deliberately: a text alternative measurably
+        # improves deliverability and is what strict clients render.
+        email["text"] = body_text
+    if reply_to:
+        email["replyTo"] = reply_to
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                MAILERCLOUD_ENDPOINT,
+                json={"email": email, "version": MAILERCLOUD_VERSION},
+                headers={
+                    "Authorization": m["api_key"],
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Mailercloud request failed: %s", type(exc).__name__)
+        return {"success": False, "error": "network_error",
+                "message": f"Could not reach Mailercloud: {type(exc).__name__}"}
+
+    try:
+        payload = response.json() or {}
+    except ValueError:
+        payload = {}
+
+    # Trust the body, not the status line. This API answers 200 with
+    # {"status": "ERROR"} for at least some failures, so treating any 2xx as
+    # delivered would report a send that never happened.
+    if response.status_code == 200 and str(payload.get("status", "")).upper() == "SUCCESS":
+        logger.info("Email sent via Mailercloud to %s", to_email)
+        return {"success": True, "message": f"Email sent to {to_email}",
+                "to": to_email, "subject": subject, "provider": "mailercloud"}
+
+    detail = payload.get("message") or response.text[:200]
+    code = payload.get("statusCode")
+
+    if response.status_code in (401, 403):
+        return {"success": False, "error": "auth_failed",
+                "message": (
+                    f"Mailercloud rejected the API key. {detail} "
+                    "The key is sent verbatim — it must not have a 'Bearer ' prefix."
+                ).strip()}
+
+    lowered = str(detail).lower()
+    if "sender" in lowered or "from" in lowered or "domain" in lowered or "verif" in lowered:
+        return {"success": False, "error": "invalid_sender",
+                "message": (
+                    f"Mailercloud refused the sender address. {detail} "
+                    f"'{m['from_email']}' must be a verified sender or on a verified "
+                    "domain in your Mailercloud dashboard."
+                ).strip()}
+
+    return {"success": False, "error": "send_failed",
+            "message": f"Mailercloud returned {response.status_code}"
+                      + (f" (code {code})" if code else "") + f". {detail}"}
+
 
 def _resend_config() -> dict:
     return {
@@ -83,13 +186,20 @@ def active_provider() -> str:
     into the dashboard takes effect without a second setting nobody documents.
     """
     explicit = os.environ.get("EMAIL_PROVIDER", "").strip().lower()
-    if explicit in ("smtp", "resend"):
+    if explicit in ("smtp", "resend", "mailercloud"):
         return explicit
-    return "resend" if _resend_config()["api_key"] else "smtp"
+    if _mailercloud_config()["api_key"]:
+        return "mailercloud"
+    if _resend_config()["api_key"]:
+        return "resend"
+    return "smtp"
 
 
 def is_email_configured() -> bool:
     """Whether the active provider has everything it needs."""
+    if active_provider() == "mailercloud":
+        m = _mailercloud_config()
+        return bool(m["api_key"] and m["from_email"])
     if active_provider() == "resend":
         r = _resend_config()
         return bool(r["api_key"] and r["from_email"])
@@ -191,6 +301,11 @@ async def send_email(
         Dict with status and details
     """
     if not is_email_configured():
+        if active_provider() == "mailercloud":
+            m = _mailercloud_config()
+            missing = "MAILERCLOUD_API_KEY" if not m["api_key"] else "MAILERCLOUD_FROM_EMAIL"
+            return {"success": False, "error": "email_not_configured",
+                    "message": f"Mailercloud is not configured. Set {missing}."}
         if active_provider() == "resend":
             missing = "RESEND_API_KEY" if not _resend_config()["api_key"] else "RESEND_FROM_EMAIL"
             return {"success": False, "error": "email_not_configured",
@@ -210,7 +325,12 @@ async def send_email(
 
     # Dispatch AFTER validation so both backends reject a bad recipient
     # identically, and neither burns a network call on one.
-    if active_provider() == "resend":
+    provider = active_provider()
+    if provider == "mailercloud":
+        return await _send_via_mailercloud(
+            to_email, subject, body_html, body_text, reply_to, cc, bcc
+        )
+    if provider == "resend":
         return await _send_via_resend(
             to_email, subject, body_html, body_text, reply_to, cc, bcc
         )
@@ -384,6 +504,24 @@ def get_email_config_status() -> dict:
     would put it in logs, screenshots and support threads.
     """
     provider = active_provider()
+    if provider == "mailercloud":
+        m = _mailercloud_config()
+        return {
+            "configured": is_email_configured(),
+            "provider": "mailercloud",
+            "host": "email-api.mailercloud.com",
+            "port": 443,
+            "from_email": m["from_email"] or None,
+            "use_tls": True,
+            "username_set": bool(m["api_key"]),
+            "password_set": bool(m["api_key"]),
+            "missing": [
+                name for name, value in (
+                    ("MAILERCLOUD_API_KEY", m["api_key"]),
+                    ("MAILERCLOUD_FROM_EMAIL", m["from_email"]),
+                ) if not value
+            ],
+        }
     if provider == "resend":
         r = _resend_config()
         return {
