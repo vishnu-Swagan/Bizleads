@@ -46,12 +46,13 @@ export const LEGAL = {
   /**
    * Data-protection enquiries and data-subject requests.
    *
-   * Currently the same mailbox as support. That is lawful — GDPR requires a
-   * reachable contact, not a dedicated one — but privacy@ on the same domain
-   * separates statutory requests, which carry a one-month deadline, from
-   * ordinary support traffic where they are easy to lose.
+   * Separate from support on purpose: access, correction and erasure requests
+   * carry a one-month statutory deadline under GDPR Art. 12(3), and a missed
+   * one is a breach. Keeping them out of general support traffic gives that
+   * clock somewhere visible to run, and leaves a clean audit trail if a
+   * supervisory authority ever asks how requests were handled.
    */
-  privacyEmail: 'support@torquetrendsllc.co.site',
+  privacyEmail: 'privacy@torquetrendsllc.co.site',
 
   /**
    * UK/EU representative under GDPR Art. 27.
