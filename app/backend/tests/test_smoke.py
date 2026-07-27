@@ -1,7 +1,13 @@
 async def test_health_endpoint_serves(anon_client):
     response = await anon_client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+
+    body = response.json()
+    assert body["status"] == "healthy"
+    # `commit` identifies the deployed build; it is "unknown" outside Render.
+    # Asserted by key rather than by whole-payload equality so that adding a
+    # diagnostic field does not fail an unrelated liveness test.
+    assert "commit" in body
 
 
 async def test_user_a_and_user_b_clients_resolve_independent_identities(user_a_client, user_b_client):

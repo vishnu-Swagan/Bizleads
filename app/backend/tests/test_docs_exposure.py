@@ -55,3 +55,29 @@ def test_an_unset_environment_is_treated_as_development(monkeypatch):
     import main
     app = importlib.reload(main).app
     assert app.docs_url == "/docs"
+
+
+def test_health_reports_the_deployed_commit(monkeypatch):
+    """Without this, a stale deploy is invisible from outside.
+
+    Every real endpoint answers 401 before validating a body, and the docs
+    are closed in production, so there is no other signal that distinguishes
+    a current build from one several commits behind.
+    """
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "a340758bc0ffee1234567890")
+    import main
+    importlib.reload(main)
+
+    payload = main.health_check()
+    assert payload["status"] == "healthy"
+    assert payload["commit"] == "a340758", "short SHA must be matchable against git log"
+
+
+def test_health_still_answers_without_a_commit_variable(monkeypatch):
+    """Local runs have no RENDER_GIT_COMMIT; the probe must not break."""
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    import main
+    importlib.reload(main)
+
+    assert main.health_check() == {"status": "healthy", "commit": "unknown"}

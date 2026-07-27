@@ -245,7 +245,23 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    """Liveness probe, and the only way to tell which build is actually live.
+
+    The deployed commit is reported because there is otherwise no way to
+    confirm a push reached production: the API docs are closed outside
+    development, and every real endpoint answers 401 before it validates
+    anything, so a stale build and a current one are indistinguishable from
+    outside. That ambiguity has already cost real debugging time.
+
+    Render supplies RENDER_GIT_COMMIT automatically. Only the short SHA is
+    exposed — enough to match against `git log`, and it reveals nothing that
+    the public repository does not already.
+    """
+    commit = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT")
+    return {
+        "status": "healthy",
+        "commit": commit[:7] if commit else "unknown",
+    }
 
 
 def run_in_debug_mode(app: FastAPI):
