@@ -413,6 +413,12 @@ async def qualify_leads(
             # The URL after redirects — what was actually measured.
             update["website_url"] = measurement["website_url"]
 
+        # Fill in a contact address found on the site, but never overwrite one
+        # that is already there: a user-entered address, or one they corrected,
+        # outranks anything scraped from a page.
+        if measurement.get("contact_email") and not (lead.contact_email or "").strip():
+            update["contact_email"] = measurement["contact_email"]
+
         # findings/qualified_at follow the same rule: only persist them when
         # a website_score was actually established. A None score means the
         # measurement could not run (invalid/blocked/parked/unreachable), and

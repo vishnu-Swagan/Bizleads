@@ -42,6 +42,40 @@ def _re(pattern: str, text: str) -> bool:
     return re.search(pattern, text, re.IGNORECASE) is not None
 
 
+# Addresses that belong to the site's tooling rather than its owner. Writing
+# to one of these reaches a CDN's abuse desk or a template author, not the
+# business — and looks like a scraper to the recipient.
+_EMAIL_NOISE = (
+    "example.com", "domain.com", "yourdomain", "sentry.io", "wixpress.com",
+    "godaddy.com", "squarespace.com", "@2x", "sentry-", "wordpress.org",
+    "no-reply", "noreply", "donotreply",
+)
+
+_EMAIL_PATTERN = re.compile(
+    r"mailto:\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})", re.I
+)
+
+
+def _first_email(html: str) -> Optional[str]:
+    """The first plausible contact address in a mailto: link.
+
+    Deliberately restricted to mailto: hrefs rather than scanning the whole
+    page for anything @-shaped. A loose regex over raw HTML picks up asset
+    filenames, analytics identifiers and schema fragments, and a single wrong
+    address sends a stranger an email about a business that is not theirs.
+
+    A mailto link is an address the business chose to publish.
+    """
+    for match in _EMAIL_PATTERN.finditer(html or ""):
+        candidate = match.group(1).strip().rstrip(".").lower()
+        if any(noise in candidate for noise in _EMAIL_NOISE):
+            continue
+        if len(candidate) > 254:  # RFC 5321 maximum
+            continue
+        return candidate
+    return None
+
+
 def extract_signals(
     html: str,
     *,
@@ -68,6 +102,16 @@ def extract_signals(
         "has_form": "<form" in low,
         "has_tel_link": 'href="tel:' in low or "href='tel:" in low,
         "has_mailto_link": 'href="mailto:' in low or "href='mailto:" in low,
+        # The address itself, not just whether one exists.
+        #
+        # Nothing else in the pipeline can supply a business email: the
+        # listing provider always returns None for it. Without this, every
+        # lead reaches the composer with no recipient and is skipped, so the
+        # automation would qualify leads and then draft nothing at all.
+        #
+        # The page has already been fetched and parsed for the checks above,
+        # so this costs nothing extra and involves no additional request.
+        "contact_email": _first_email(html),
         "has_schema_markup": "application/ld+json" in low or "itemtype=" in low,
         "is_wordpress": "wp-content" in low or "wp-includes" in low,
         "jquery_major": int(jquery.group(1)) if jquery else None,

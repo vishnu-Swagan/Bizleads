@@ -79,6 +79,10 @@ async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
         "website_state": "unknown",
         "audit": None,
         "findings": [],
+        # An address published on the site itself. The listing provider never
+        # supplies one, so without this a qualified lead still has no
+        # recipient and outreach cannot be drafted for it at all.
+        "contact_email": None,
         "evidence_tier": None,
         "audit_available": is_pagespeed_configured(),
         "evidence": {
@@ -132,6 +136,7 @@ async def qualify_website(raw_url: Optional[str]) -> Dict[str, Any]:
         result["website_score"] = heuristic["website_score"]
         result["website_state"] = heuristic["website_state"]
         result["findings"] = heuristic["findings"]
+        result["contact_email"] = heuristic["signals"].get("contact_email")
         result["evidence"]["heuristic"] = {
             "signals": heuristic["signals"],
             "score_version": heuristic["score_version"],
