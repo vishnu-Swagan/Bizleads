@@ -25,14 +25,25 @@ export const LEGAL = {
   entity: 'Torque Trends LLC',
 
   /**
-   * Kentucky Secretary of State organisation number.
+   * Deliberately empty, and it must stay that way.
    *
-   * TODO: still required. Both the Terms and the Privacy Policy render this
-   * conditionally, so setting it to '' removes the clause cleanly rather than
-   * printing a blank — but a contract that identifies the entity by number is
-   * materially easier to enforce than one that does not.
+   * The company's federal EIN is NOT recorded here. Everything in this file
+   * is compiled into the public JavaScript bundle and served to every
+   * visitor, and this repository is public — so a value here is published
+   * twice over, and a comment would leak it just as effectively as rendering
+   * it. An EIN is a tax identifier used in fraudulent filings and identity
+   * theft; there is no reason to expose one to identify a party to a
+   * consumer contract, and no law requires it.
+   *
+   * An empty string is the correct value, not a missing one: both the Terms
+   * and the Privacy Policy render the registration clause conditionally, so
+   * this omits the sentence cleanly rather than printing a gap. The entity
+   * is identified by its registered name and address, which is sufficient.
+   *
+   * If a state organisation number is ever wanted here, that is a public
+   * record and safe to publish — an EIN is not.
    */
-  companyNumber: '[TODO: KY organisation number]',
+  companyNumber: '',
 
   /** Registered address. Required by GDPR Art. 13(1)(a) as controller identity. */
   address: '271 W Short St, Ste 410 #2463, Lexington, KY 40507, United States',
