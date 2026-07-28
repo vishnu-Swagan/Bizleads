@@ -65,7 +65,19 @@ class CreditTopUpRequest(BaseModel):
 
 @router.get("/plans")
 async def get_plans():
-    """Get available subscription plans"""
+    """Get available subscription plans.
+
+    This must say exactly what app/frontend/src/pages/Pricing.tsx says. It
+    drifted once and advertised White-label Proof Rooms, Lead reservations,
+    CRM/API access and per-tier team seats — none of which ship. "Proof Room"
+    existed nowhere in this codebase except that list. A second, unrendered
+    copy of the offer is still a public statement of what a customer is
+    buying, so it is kept in step by hand until there is one source for both.
+
+    Team seats are deliberately absent: `max_seats` is granted and displayed
+    but enforced nowhere, and there is no invite flow, so no customer can use
+    a seat they were sold.
+    """
     return {
         "plans": [
             {
@@ -74,14 +86,12 @@ async def get_plans():
                 "price_monthly": 29,
                 "price_annual": 290,
                 "credits": 300,
-                "seats": 1,
                 "features": [
                     "300 monthly discovery credits",
-                    "1 team seat",
-                    "Full scoring system",
-                    "Lead pipeline management",
-                    "Basic analytics",
-                    "CSV export",
+                    "Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call",
+                    "Lead pipeline & CRM",
+                    "Analytics dashboard",
+                    "Email support",
                 ]
             },
             {
@@ -90,15 +100,12 @@ async def get_plans():
                 "price_monthly": 79,
                 "price_annual": 790,
                 "credits": 1500,
-                "seats": 3,
                 "features": [
                     "1,500 monthly discovery credits",
-                    "3 team seats",
-                    "Saved search monitoring",
-                    "Advanced analytics & funnel",
-                    "White-label Proof Rooms",
-                    "Integrations & API access",
-                    "Priority job processing",
+                    "Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call",
+                    "Lead pipeline & CRM",
+                    "Analytics dashboard",
+                    "Priority support",
                 ]
             },
             {
@@ -107,23 +114,18 @@ async def get_plans():
                 "price_monthly": 199,
                 "price_annual": 1990,
                 "credits": 5000,
-                "seats": 10,
                 "features": [
                     "5,000 monthly discovery credits",
-                    "10 team seats",
-                    "Lead reservations",
-                    "Advanced analytics & calibration",
-                    "CRM/API access",
-                    "Priority processing",
+                    "Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call",
+                    "Lead pipeline & CRM",
+                    "Analytics dashboard",
                     "Dedicated support",
-                    "Custom integrations",
                 ]
             },
         ],
         "trial": {
             "duration_days": 7,
             "credits": 25,
-            "limitations": ["Watermarked Proof Rooms", "No bulk export", "Limited saves"]
         }
     }
 
@@ -213,7 +215,12 @@ async def create_checkout(
                     "currency": "usd",
                     "product_data": {
                         "name": f"BizLeads {plan['name']} Plan",
-                        "description": f"{plan['credits']} monthly credits, {plan['seats']} seat(s)",
+                        # Credits only. This string is rendered on Stripe's own
+                        # checkout page, which is the last thing a customer
+                        # reads before paying — the seat count that used to be
+                        # here was the most exposed statement of an
+                        # entitlement nothing enforces or offers.
+                        "description": f"{plan['credits']} monthly credits",
                     },
                     "unit_amount": unit_amount,
                     "recurring": {"interval": interval},

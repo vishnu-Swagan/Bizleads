@@ -7,6 +7,13 @@ import { cn } from '@/lib/utils';
 import { LogoMark } from '@/components/Logo';
 import SiteFooter from '@/components/SiteFooter';
 
+// Tiers differ by discovery volume only. Team seats were advertised here until
+// it became clear nothing enforces or even offers them: `max_seats` is written
+// by the billing webhook and displayed back, but read as a limit nowhere, and
+// there is no invite flow — so an Agency customer could not add the ten people
+// the page promised. Selling a seat count nobody can use is the same class of
+// mistake as the fabricated leads this product was built to avoid. Put the
+// lines back only once workspace-scoped tenancy and an invite flow ship.
 const plans = [
   {
     id: 'solo',
@@ -15,10 +22,8 @@ const plans = [
     annual: 290,
     description: 'For freelance web designers getting started',
     credits: '300',
-    seats: '1',
     features: [
       '300 monthly discovery credits',
-      '1 team seat',
       'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
       'Lead pipeline & CRM',
       'Analytics dashboard',
@@ -31,12 +36,10 @@ const plans = [
     name: 'Pro',
     price: 79,
     annual: 790,
-    description: 'For growing studios and small teams',
+    description: 'For studios running outreach at a steady clip',
     credits: '1,500',
-    seats: '3',
     features: [
       '1,500 monthly discovery credits',
-      '3 team seats',
       'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
       'Lead pipeline & CRM',
       'Analytics dashboard',
@@ -49,12 +52,10 @@ const plans = [
     name: 'Agency',
     price: 199,
     annual: 1990,
-    description: 'For agencies with multiple team members',
+    description: 'For agencies prospecting across many markets',
     credits: '5,000',
-    seats: '10',
     features: [
       '5,000 monthly discovery credits',
-      '10 team seats',
       'Website audit: HTTPS, mobile, titles, meta, structured data, tap-to-call',
       'Lead pipeline & CRM',
       'Analytics dashboard',
@@ -111,7 +112,7 @@ export default function Pricing() {
               🚀 Free Trial: 7 days, 25 credits, full scoring — no card required
             </p>
             <p className="text-sm text-indigo-700 mt-1">
-              25 discovery credits, 1 seat, and the full toolset. No card required.
+              25 discovery credits and the full toolset. No card required.
             </p>
           </div>
 
@@ -145,8 +146,6 @@ export default function Pricing() {
                 <div className="flex-1 mb-6">
                   <div className="flex items-center gap-2 mb-3 text-sm font-medium text-slate-700">
                     <span>{plan.credits} credits/mo</span>
-                    <span className="text-slate-300">·</span>
-                    <span>{plan.seats} seat{parseInt(plan.seats) > 1 ? 's' : ''}</span>
                   </div>
                   <ul className="space-y-2.5">
                     {plan.features.map((feature) => (
