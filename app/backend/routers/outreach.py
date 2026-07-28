@@ -275,8 +275,48 @@ async def compose_drafts(
         sender_name=(data.sender_name or "").strip(),
         sender_business=(data.sender_business or "").strip(),
     )
+    # Persist every draft into the approval queue.
+    #
+    # Composing used to return drafts to the browser and keep nothing. The
+    # queue was therefore always empty no matter how many times a user pressed
+    # "Draft from findings", and a refresh lost the lot — so the two halves of
+    # the feature looked broken independently while each worked on its own.
+    # The queue is now the single record of a draft; the response still
+    # carries them so the UI can show them without a second request.
+    for draft in result.get("drafts", []):
+        # Re-composing a lead replaces its unsent draft rather than stacking a
+        # second one. Two pending emails to the same prospect is the failure
+        # nobody notices until both have been sent.
+        existing = await db.execute(
+            select(Outreach_drafts).where(
+                Outreach_drafts.user_id == str(current_user.id),
+                Outreach_drafts.lead_id == draft["lead_id"],
+                Outreach_drafts.status == "pending",
+            )
+        )
+        for stale in existing.scalars().all():
+            await db.delete(stale)
+
+        row = Outreach_drafts(
+            user_id=str(current_user.id),
+            lead_id=draft["lead_id"],
+            automation_id=None,
+            to_email=draft["to_email"],
+            subject=draft["subject"],
+            body_text=draft["body_text"],
+            based_on=draft.get("based_on"),
+            status="pending",
+            sequence_step=1,
+        )
+        db.add(row)
+        await db.flush()      # assigns the id
+        draft["id"] = row.id  # so the UI edits and sends this exact row
+
+    await db.commit()
+
     result["not_found"] = not_found
     result["email_configured"] = (await resolve_identity(db, current_user.id)) is not None
+    result["queued"] = len(result.get("drafts", []))
     return result
 
 
