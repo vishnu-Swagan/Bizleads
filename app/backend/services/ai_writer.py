@@ -395,6 +395,89 @@ async def polish(
     return {"text": result, "changed": result.strip() != original.strip()}
 
 
+def _angle_system_prompt(
+    *,
+    business_name: str,
+    category: str,
+    location: str,
+    findings: List[Dict[str, Any]],
+) -> str:
+    """Prompt for an internal sales note, not a message to the prospect.
+
+    The audience distinction matters: this text is read by the person selling,
+    never sent, so it may recommend an approach and prioritise findings. What
+    it may NOT do is assert anything about the business that was not measured
+    — the same fence as every other call in this module. "They have no
+    analytics, so lead with the fact they cannot see which marketing works" is
+    allowed. "They are probably losing customers to competitors" is not: no
+    competitor was measured, and no loss was measured.
+    """
+    place = f" in {location}" if location.strip() else ""
+    return (
+        "You are a senior web consultant briefing a colleague who is about to "
+        f"approach \"{business_name}\"{place} (category: {category or 'unknown'}) "
+        "as a prospect. Write a short internal note on how to win this lead.\n\n"
+        "The note is INTERNAL. It is never sent to the prospect. Write to the "
+        "colleague, not to the business owner.\n\n"
+        "You will be given MEASURED FINDINGS about their website below. These "
+        "are the ONLY facts about this business you may rely on.\n\n"
+        + _ANTI_FABRICATION_RULES
+        + "\n\nIn particular, for this note specifically: do NOT speculate "
+        "about the business's revenue, staff, competitors, customers, "
+        "budget, or how much any problem is costing them. None of that was "
+        "measured. Recommending an ANGLE is your job; inventing a FACT to "
+        "support it is not.\n\n"
+        "Measured findings (the ONLY facts you may reference):\n"
+        + _findings_block(findings)
+        + "\n\nCover, in at most 120 words total:\n"
+        "1. The single strongest finding to lead with, and why that one.\n"
+        "2. How to frame it for this kind of business specifically.\n"
+        "3. One concrete thing to offer or ask in the first contact.\n\n"
+        "Write plain prose or short bullets. No preamble, no heading, no "
+        "markdown code fences — just the note itself."
+    )
+
+
+async def suggest_angle(
+    business_name: str,
+    category: str,
+    findings: List[Dict[str, Any]],
+    *,
+    location: str = "",
+) -> Optional[str]:
+    """An internal note on how to win a lead, grounded only in its findings.
+
+    Returns None — never a placeholder or a generic note — when there are no
+    findings, when no provider is configured, or when the call fails. A lead
+    nobody measured has no honest angle to suggest, and a note invented for it
+    would be exactly the fabrication this product deletes on sight.
+    """
+    if not findings:
+        return None
+    if not is_ai_configured():
+        return None
+
+    system = _angle_system_prompt(
+        business_name=business_name or "the business",
+        category=category or "",
+        location=location or "",
+        findings=findings,
+    )
+    result = await _call_anthropic(system, "Write the note now.")
+    if result is None:
+        return None
+
+    note = _clean_model_text(result)
+    return note or None
+
+
+# The note_type that marks a lead note as machine-written. Regenerating
+# replaces the row carrying this type and never touches a human's notes, so it
+# has to be a constant both writers agree on rather than a literal repeated at
+# each call site.
+AI_ANGLE_NOTE_TYPE = "ai_angle"
+
+
 async def draft_for_category(
     business_name: str,
     category: str,

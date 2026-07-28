@@ -20,7 +20,12 @@ show a fact rather than a number.
 import re
 from typing import Any, Dict, List, Optional, TypedDict
 
-SCORE_VERSION = "site-signals-1.0.0"
+# Bumped when the checks or their penalties change, so a stored score can be
+# told apart from one produced by a different ruleset. 1.1.0 added noindex,
+# social links, analytics, Open Graph, mixed content, legacy HTML, favicon,
+# canonical and lang. Scores from 1.0.0 are not directly comparable: the same
+# site measured under 1.1.0 will usually score a little lower.
+SCORE_VERSION = "site-signals-1.1.0"
 EVIDENCE_TIER = "heuristic"
 
 # Slower than this and a visitor notices; slower than SLOW and many leave.
@@ -89,6 +94,14 @@ def extract_signals(
     jquery = re.search(r"jquery[.\-]?(\d+)\.(\d+)", low)
     copyright_years = [int(y) for y in re.findall(r"(?:©|&copy;|copyright)\s*(20\d{2})", low)]
 
+    # Mixed content only means anything on an HTTPS page: an http:// asset on
+    # an http:// page is not "mixed", it is just an insecure site, which
+    # no_https already reports. Checking src/href attributes specifically
+    # rather than any occurrence of "http://" avoids matching schema.org URLs,
+    # XML namespaces and link text, none of which the browser ever fetches.
+    on_https = final_url.lower().startswith("https://")
+    insecure_assets = len(re.findall(r'(?:src|href)=["\']http://', low)) if on_https else 0
+
     return {
         "https": final_url.lower().startswith("https://"),
         "elapsed_seconds": elapsed_seconds,
@@ -122,6 +135,33 @@ def extract_signals(
                 for platform in ("facebook", "instagram", "twitter", "linkedin", "tiktok", "youtube")
                 if f"{platform}.com" in low
             }
+        ),
+        # --- further checkable facts, same fetched bytes, no extra request ---
+        #
+        # `noindex` is the single most consequential thing on this list: a page
+        # carrying it is deliberately excluded from search results, and it is
+        # very often left behind by accident when a staging site goes live.
+        "is_noindex": bool(re.search(r'<meta[^>]+name=["\']robots["\'][^>]*content=["\'][^"\']*noindex', low)),
+        "has_favicon": _re(r'<link[^>]+rel=["\'][^"\']*icon', low),
+        "has_open_graph": _re(r'<meta[^>]+property=["\']og:', low),
+        "has_canonical": _re(r'<link[^>]+rel=["\']canonical["\']', low),
+        "has_lang_attribute": _re(r"<html[^>]+lang=", low),
+        # Any of the mainstream tags. A business with no analytics at all
+        # cannot tell which marketing works, which is a straightforward thing
+        # to sell — and unlike most checks here it is invisible to the owner.
+        "has_analytics": any(
+            marker in low
+            for marker in (
+                "googletagmanager.com", "google-analytics.com", "gtag(",
+                "plausible.io", "usefathom.com", "matomo", "clarity.ms",
+                "hotjar.com", "segment.com",
+            )
+        ),
+        "insecure_assets": insecure_assets,
+        # Presentational tags dropped from HTML5 in 2014. Their presence is a
+        # reliable marker of a page nobody has rebuilt in a decade.
+        "legacy_html_tags": sorted(
+            {tag for tag in ("<center", "<font", "<marquee", "<frameset") if tag in low}
         ),
     }
 
@@ -194,6 +234,65 @@ def score_signals(signals: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(newest_year, int) and newest_year < CURRENT_YEAR - 1:
         deduct("stale_copyright", "Site looks unmaintained", 5,
                f"Copyright notice still says {newest_year}", "stack")
+
+    # --- second tier of checks ---------------------------------------------
+    #
+    # Penalties here are deliberately small. The checks above already total
+    # ~137 points against a 100-point scale, so a site failing several of them
+    # floors at 0 regardless; piling on heavy new deductions would make the
+    # score less informative, not more, by pushing every imperfect site into
+    # the same bucket. These exist mainly to give outreach more specific,
+    # verifiable things to cite — which is what actually wins the work — so
+    # they are weighted for accuracy of the *finding*, not severity of the
+    # score. noindex is the exception and is scored like the emergency it is.
+
+    if signals.get("is_noindex"):
+        deduct("noindex", "Hidden from search engines", 15,
+               "A robots meta tag says noindex — search engines are told to "
+               "exclude this page entirely", "seo")
+
+    if not signals.get("social_links"):
+        deduct("no_social_links", "No social media linked", 5,
+               "No link to Facebook, Instagram, LinkedIn, X, TikTok or YouTube "
+               "anywhere on the page", "conversion")
+
+    if not signals.get("has_analytics"):
+        deduct("no_analytics", "No analytics installed", 4,
+               "No Google Analytics, Tag Manager, Plausible, Fathom, Matomo, "
+               "Clarity or Hotjar — visits are not being measured at all",
+               "marketing")
+
+    if not signals.get("has_open_graph"):
+        deduct("no_open_graph", "Links share badly", 4,
+               "No Open Graph tags — shared on social or messaging apps the "
+               "page previews with no title, description or image", "social")
+
+    insecure = signals.get("insecure_assets") or 0
+    if insecure:
+        deduct("mixed_content", "Insecure content on a secure page", 6,
+               f"{insecure} asset reference(s) load over plain http:// — "
+               "browsers block or warn on these", "security")
+
+    legacy = signals.get("legacy_html_tags") or []
+    if legacy:
+        deduct("legacy_html", "Built with obsolete HTML", 5,
+               f"Uses {', '.join(t.lstrip('<') for t in legacy)} — removed from "
+               "the HTML standard in 2014", "stack")
+
+    if not signals.get("has_favicon"):
+        deduct("no_favicon", "No favicon", 2,
+               "No icon set, so the browser tab and bookmarks show a blank "
+               "placeholder", "brand")
+
+    if not signals.get("has_canonical"):
+        deduct("no_canonical", "No canonical URL", 2,
+               "No rel=canonical — duplicate versions of a page can compete "
+               "with each other in search", "seo")
+
+    if not signals.get("has_lang_attribute"):
+        deduct("no_lang", "Page language not declared", 2,
+               "No lang attribute on <html> — screen readers cannot tell which "
+               "language to pronounce", "accessibility")
 
     score = max(0, min(100, 100 - sum(f["penalty"] for f in findings)))
 

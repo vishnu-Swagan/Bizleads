@@ -19,6 +19,7 @@ from services.pagespeed import is_pagespeed_configured, audit_website, bulk_audi
 from services.email_sender import send_email, send_bulk_emails, get_email_config_status
 from services.email_identity import resolve_identity
 from services.outreach_composer import compose_many, parse_findings
+from services.lead_angle import write_angle_note
 from services.leads import LeadsService
 from services import ai_writer
 
@@ -421,6 +422,48 @@ async def ai_draft_for_lead(
         "body_text": draft["body_text"],
         "ai_available": True,
     }
+
+
+class AIAngleRequest(BaseModel):
+    lead_id: int
+
+
+@router.post("/ai/angle")
+async def ai_angle_for_lead(
+    data: AIAngleRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Write an internal "how to win this lead" note, and store it.
+
+    Same grounding rule as /ai/draft: only the lead's own measured findings.
+    The difference is the audience — this note is read by the person selling
+    and is never sent to the prospect, so it may recommend an approach where
+    the outreach draft may only state facts.
+
+    Regenerating replaces the previous machine-written note for this lead and
+    leaves every human-written note alone.
+    """
+    if not ai_writer.is_ai_configured():
+        raise HTTPException(status_code=503, detail=_AI_NOT_CONFIGURED_DETAIL)
+
+    service = LeadsService(db)
+    lead = await service.get_by_id(data.lead_id, user_id=str(current_user.id))
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not parse_findings(lead.findings):
+        raise HTTPException(
+            status_code=409,
+            detail="This lead has no measured findings yet. Qualify it first.",
+        )
+
+    note = await write_angle_note(db, lead, str(current_user.id))
+    if note is None:
+        raise HTTPException(status_code=503, detail=_AI_UNAVAILABLE_DETAIL)
+
+    await db.commit()
+    return {"lead_id": lead.id, "note": note, "note_type": ai_writer.AI_ANGLE_NOTE_TYPE}
 
 
 @router.get("/ai/status")

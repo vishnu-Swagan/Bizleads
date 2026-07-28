@@ -29,6 +29,11 @@ class Leads(Base):
     social_platforms = Column(String, nullable=True, default='[]', server_default='[]')
     contact_email = Column(String, nullable=True, default='', server_default='')
     contact_phone = Column(String, nullable=True, default='', server_default='')
+    # Street address as the provider recorded it. Nullable with no default,
+    # unlike the two above: an empty string here would be indistinguishable
+    # from "the provider had no address on record", and those are different
+    # facts. See migration a2b7c9d4e6f1.
+    address = Column(String, nullable=True)
     pipeline_stage = Column(String, nullable=True, default='new_lead', server_default='new_lead')
     priority = Column(String, nullable=True, default='medium', server_default='medium')
     notes_count = Column(Integer, nullable=True, default=0, server_default='0')

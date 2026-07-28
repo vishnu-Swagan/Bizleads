@@ -40,6 +40,8 @@ interface BusinessResult {
   has_website: boolean | null;
   contact_email: string;
   contact_phone: string;
+  /** Street address as the provider recorded it; '' when it had none. */
+  full_address?: string;
   priority_score: number;
   website_state: string;
   scores: {
@@ -210,6 +212,10 @@ export default function AppDiscover() {
     social_platforms: '[]',
     contact_email: biz.contact_email || '',
     contact_phone: biz.contact_phone || '',
+    // The provider has returned this on every POI all along; there was simply
+    // no column to keep it in. Undefined rather than '' when absent, so "no
+    // address on record" stays distinguishable from an empty one.
+    address: biz.full_address || undefined,
     pipeline_stage: 'new_lead',
     priority: biz.priority_score >= 70 ? 'high' : biz.priority_score >= 40 ? 'medium' : 'low',
     notes_count: 0,

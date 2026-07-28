@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { client } from '@/lib/api';
 import { toast } from 'sonner';
-import { ArrowLeft, Globe, Mail, Phone, Save, Plus, Sparkles, Loader2 } from 'lucide-react';
+import { ArrowLeft, Globe, Mail, Phone, MapPin, Save, Plus, Sparkles, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDataSourceBadge } from './Leads';
 
@@ -37,6 +37,36 @@ interface Lead {
    *  must stay distinguishable — see parseFindings below. */
   findings?: string | null;
   qualified_at?: string | null;
+  /** JSON-encoded string[] of platforms linked from the site. See parseSocialPlatforms. */
+  social_platforms?: string | null;
+  /** Street address from the provider; absent on leads saved before migration a2b7c9d4e6f1. */
+  address?: string | null;
+}
+
+/**
+ * Which social platforms the site links to, or null for "nobody has looked".
+ *
+ * Needs `qualifiedAt` as well as the column because `social_platforms` cannot
+ * express the difference on its own: it defaults to '[]' and the save path
+ * writes '[]' on create, so an untouched lead is byte-identical to one
+ * measured as having no links. `qualified_at` is NULL until a measurement
+ * runs, which is the only reliable signal that a page was ever read.
+ *
+ * Without this gate every un-qualified lead would report "no linked accounts
+ * found" — an assertion about a business nobody has looked at.
+ */
+function parseSocialPlatforms(
+  raw: string | null | undefined,
+  qualifiedAt: string | null | undefined,
+): string[] | null {
+  if (!qualifiedAt) return null;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 /** GET /api/v1/outreach/ai/status. `model` names the provider actually in use. */
@@ -87,7 +117,12 @@ interface Note {
   id: number;
   content: string;
   created_at: string;
+  /** 'ai_angle' marks the machine-written note; anything else is a human's. */
+  note_type?: string | null;
 }
+
+/** Must match services/ai_writer.py::AI_ANGLE_NOTE_TYPE. */
+const AI_ANGLE_NOTE_TYPE = 'ai_angle';
 
 const stages = ['new_lead', 'contacted', 'in_progress', 'won', 'lost'];
 const stageLabels: Record<string, string> = {
@@ -110,6 +145,7 @@ export default function AppLeadDetail() {
   const [previewing, setPreviewing] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [queued, setQueued] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
 
   useEffect(() => {
     if (user && id) fetchLead();
@@ -165,6 +201,39 @@ export default function AppLeadDetail() {
    * the draft can be polished or rewritten and then actually sent; there is no
    * second half-persisted AI path here.
    */
+  /**
+   * Write (or rewrite) the internal "how to win this lead" note.
+   *
+   * The server owns replace-not-stack, so this refetches the notes list
+   * afterwards rather than splicing the response in locally — that way the
+   * displayed note is the row that actually exists, not an optimistic guess
+   * that could disagree with it.
+   */
+  const suggestAngle = async () => {
+    if (!lead) return;
+    setSuggesting(true);
+    try {
+      await client.apiCall.invoke({
+        url: '/api/v1/outreach/ai/angle',
+        method: 'POST',
+        data: { lead_id: lead.id },
+        options: { timeout: 60000 },
+      });
+      const notesRes = await client.entities.lead_notes.query({
+        query: { lead_id: lead.id },
+        sort: '-created_at',
+      });
+      setNotes(notesRes.data?.items || []);
+      // A plain apostrophe: this is a JS string, not JSX, so an HTML entity
+      // here would show up literally in the toast.
+      toast.success("Angle written from this lead's findings.");
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not write an angle');
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const draftOutreach = async () => {
     if (!lead) return;
     setDrafting(true);
@@ -269,11 +338,17 @@ export default function AppLeadDetail() {
     );
   }
 
-  // Computed after the !lead guard so both are plain values by render time.
+  // Computed after the !lead guard so these are plain values by render time.
   const findings = parseFindings(lead.findings);
   const qualifiedOn = lead.qualified_at
     ? new Date(lead.qualified_at).toLocaleDateString()
     : null;
+  const socialPlatforms = parseSocialPlatforms(lead.social_platforms, lead.qualified_at);
+  // The server keeps at most one angle note per lead, but take the first
+  // rather than assuming exactly one — a stale duplicate should render as one
+  // note, not crash the tab.
+  const angleNote = notes.find((n) => n.note_type === AI_ANGLE_NOTE_TYPE) ?? null;
+  const humanNotes = notes.filter((n) => n.note_type !== AI_ANGLE_NOTE_TYPE);
 
   return (
     <AppShell>
@@ -380,10 +455,36 @@ export default function AppLeadDetail() {
                     )}
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600">Social Media</span>
-                  <span className="text-sm font-medium">{lead.social_score}/100</span>
+                {/* Was `{lead.social_score}/100`, which rendered as a bare
+                    "/100" on every lead: social_score is only ever written by
+                    services/google_places.py, which is not wired up, so it is
+                    NULL for everything the live provider returns.
+                    A follower or engagement score would need platform APIs
+                    this product does not have. What it CAN measure, from the
+                    page it already fetched, is which platforms the site links
+                    to — so that is what it now reports. */}
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-sm text-slate-600 shrink-0">Social Media</span>
+                  <div className="flex flex-wrap justify-end gap-1.5">
+                    {socialPlatforms === null ? (
+                      <span className="text-sm text-slate-400">Not measured yet</span>
+                    ) : socialPlatforms.length === 0 ? (
+                      <span className="text-sm text-slate-500">No linked accounts found</span>
+                    ) : (
+                      socialPlatforms.map((platform) => (
+                        <Badge key={platform} variant="outline" className="text-xs capitalize">
+                          {platform}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
                 </div>
+                {socialPlatforms !== null && socialPlatforms.length === 0 && (
+                  <p className="text-xs text-slate-400">
+                    Nothing on the site links to Facebook, Instagram, LinkedIn, X, TikTok or
+                    YouTube — itself worth raising with them.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -539,23 +640,99 @@ export default function AppLeadDetail() {
                 {lead.contact_email && (
                   <div className="flex items-center gap-3">
                     <Mail className="h-4 w-4 text-slate-400" />
-                    <span className="text-sm text-slate-700">{lead.contact_email}</span>
+                    <a
+                      href={`mailto:${lead.contact_email}`}
+                      className="text-sm text-slate-700 hover:text-indigo-600"
+                    >
+                      {lead.contact_email}
+                    </a>
                   </div>
                 )}
                 {lead.contact_phone && (
                   <div className="flex items-center gap-3">
                     <Phone className="h-4 w-4 text-slate-400" />
-                    <span className="text-sm text-slate-700">{lead.contact_phone}</span>
+                    <a href={`tel:${lead.contact_phone}`} className="text-sm text-slate-700 hover:text-indigo-600">
+                      {lead.contact_phone}
+                    </a>
                   </div>
                 )}
-                {!lead.contact_email && !lead.contact_phone && (
+                {/* The provider returns a street address on every POI and it
+                    was discarded until the `address` column existed. Leads
+                    saved before that migration have none and cannot have one
+                    reconstructed — re-running Discover populates it. */}
+                {lead.address && (
+                  <div className="flex items-start gap-3">
+                    <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                    <span className="text-sm text-slate-700">{lead.address}</span>
+                  </div>
+                )}
+                {!lead.contact_email && !lead.contact_phone && !lead.address && (
                   <p className="text-sm text-slate-500">No contact information available.</p>
+                )}
+                {!lead.contact_email && (lead.contact_phone || lead.address) && (
+                  <p className="text-xs text-slate-400 pt-1">
+                    No email address found on their site. Outreach cannot be drafted without
+                    one — add it here if you find it another way.
+                  </p>
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="notes" className="space-y-4">
+            {/* The machine-written angle is separated from the human notes
+                below rather than sorted in among them. It is generated
+                automatically on Qualify and replaced on every re-run, so a
+                reader has to be able to tell at a glance which note nobody
+                typed — and which one will be overwritten. */}
+            <Card className={cn('border-slate-200', angleNote && 'border-indigo-200 bg-indigo-50/40')}>
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+                    <Sparkles className="h-4 w-4 text-indigo-600" />
+                    How to win this lead
+                  </CardTitle>
+                  {aiStatus?.available && findings !== null && findings.length > 0 && (
+                    <Button onClick={suggestAngle} disabled={suggesting} size="sm" variant="outline">
+                      {suggesting ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                      )}
+                      {angleNote ? 'Regenerate' : 'Suggest an angle'}
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {angleNote ? (
+                  <>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                      {angleNote.content}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-3">
+                      Written from this lead&rsquo;s measured findings only. Regenerating
+                      replaces it; your own notes below are never touched.
+                    </p>
+                  </>
+                ) : findings === null || findings.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    Qualify this lead first. With nothing measured there is no honest angle to
+                    suggest, so none is invented.
+                  </p>
+                ) : aiStatus?.available ? (
+                  <p className="text-sm text-slate-500">
+                    No angle written yet — use Suggest an angle above.
+                  </p>
+                ) : (
+                  <p className="text-sm text-slate-500">
+                    Wording help is unavailable right now. The measured findings on the
+                    Evidence tab are unaffected.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
             <Card className="border-slate-200">
               <CardContent className="p-5">
                 <Textarea
@@ -572,9 +749,9 @@ export default function AppLeadDetail() {
               </CardContent>
             </Card>
 
-            {notes.length > 0 ? (
+            {humanNotes.length > 0 ? (
               <div className="space-y-2">
-                {notes.map((note) => (
+                {humanNotes.map((note) => (
                   <Card key={note.id} className="border-slate-200">
                     <CardContent className="p-4">
                       <p className="text-sm text-slate-700 whitespace-pre-wrap">{note.content}</p>

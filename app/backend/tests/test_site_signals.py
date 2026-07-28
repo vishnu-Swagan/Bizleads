@@ -9,18 +9,31 @@ Two properties matter and are tested separately:
 """
 from services.site_signals import analyse, extract_signals, score_signals
 
+# A genuinely well-built page, not merely an inoffensive one. It gained a lang
+# attribute, favicon, canonical, Open Graph tags, analytics and social links
+# when the second tier of checks landed: this fixture is the definition of
+# "nothing to sell against", so anything a competent build includes belongs
+# here. Leaving it minimal would have meant either weakening the >= 90
+# assertion or pretending the new checks were wrong, and both would have made
+# the test agree with the code by construction.
 MODERN_PAGE = """
-<html><head>
+<html lang="en-GB"><head>
   <title>Riverside Cafe — Leeds</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Independent cafe in Leeds serving breakfast and lunch.">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="canonical" href="https://example.com/">
+  <meta property="og:title" content="Riverside Cafe">
+  <meta property="og:image" content="/og.png">
   <script type="application/ld+json">{"@type":"Restaurant"}</script>
+  <script async src="https://www.googletagmanager.com/gtag/js"></script>
 </head><body>
   <h1>Riverside Cafe</h1>
   <img src="a.jpg" alt="Our terrace">
   <img src="b.jpg" alt="Coffee">
   <img src="c.jpg" alt="Cakes">
   <a href="tel:+441130000000">Call us</a>
+  <a href="https://instagram.com/riversidecafe">Instagram</a>
   <form><input name="email"></form>
   <footer>&copy; 2026 Riverside Cafe</footer>
 </body></html>
@@ -131,3 +144,83 @@ class TestUnmeasuredChecksCostNothing:
     def test_score_never_leaves_the_0_100_range(self):
         empty = score_signals({})
         assert 0 <= empty["website_score"] <= 100
+
+
+class TestTheSecondTierOfChecks:
+    """Checks added in site-signals-1.1.0.
+
+    Each exists to give outreach something specific and verifiable to cite, so
+    each is tested for the finding it produces rather than only for its effect
+    on the score.
+    """
+
+    def _ids(self, html, **kwargs):
+        kwargs.setdefault("final_url", "https://example.com")
+        return {f["id"] for f in analyse(html, **kwargs)["findings"]}
+
+    def test_a_noindex_page_is_flagged(self):
+        html = '<html><head><meta name="robots" content="noindex, nofollow"></head><body></body></html>'
+        assert "noindex" in self._ids(html)
+
+    def test_an_indexable_page_is_not_flagged(self):
+        html = '<html><head><meta name="robots" content="index, follow"></head><body></body></html>'
+        assert "noindex" not in self._ids(html)
+
+    def test_missing_social_links_are_flagged(self):
+        assert "no_social_links" in self._ids("<html><body>nothing here</body></html>")
+
+    def test_a_linked_platform_clears_the_flag(self):
+        html = '<html><body><a href="https://instagram.com/x">ig</a></body></html>'
+        assert "no_social_links" not in self._ids(html)
+
+    def test_missing_analytics_is_flagged(self):
+        assert "no_analytics" in self._ids("<html><body></body></html>")
+
+    def test_any_mainstream_analytics_clears_the_flag(self):
+        html = '<html><head><script src="https://plausible.io/js/script.js"></script></head><body></body></html>'
+        assert "no_analytics" not in self._ids(html)
+
+    def test_http_assets_on_an_https_page_are_mixed_content(self):
+        html = '<html><body><img src="http://cdn.example.com/a.jpg"></body></html>'
+        assert "mixed_content" in self._ids(html)
+
+    def test_http_assets_on_an_http_page_are_not_mixed_content(self):
+        """An insecure asset on an insecure page is not "mixed" — no_https
+        already reports that, and double-counting it would penalise the same
+        defect twice."""
+        html = '<html><body><img src="http://cdn.example.com/a.jpg"></body></html>'
+        assert "mixed_content" not in self._ids(html, final_url="http://example.com")
+
+    def test_a_schema_org_url_is_not_mistaken_for_mixed_content(self):
+        """itemtype="http://schema.org/..." is a namespace identifier the
+        browser never fetches. Matching bare "http://" would flag every page
+        using microdata."""
+        html = '<html><body><div itemscope itemtype="http://schema.org/Restaurant"></div></body></html>'
+        assert "mixed_content" not in self._ids(html)
+
+    def test_obsolete_presentational_tags_are_flagged(self):
+        assert "legacy_html" in self._ids("<html><body><center><font size=2>hi</font></center></body></html>")
+
+    def test_missing_favicon_canonical_and_lang_are_each_flagged(self):
+        ids = self._ids("<html><head></head><body></body></html>")
+        assert {"no_favicon", "no_canonical", "no_lang"} <= ids
+
+    def test_a_complete_head_clears_them(self):
+        html = ('<html lang="en"><head><link rel="icon" href="/f.ico">'
+                '<link rel="canonical" href="https://example.com/">'
+                '<meta property="og:title" content="T"></head><body></body></html>')
+        ids = self._ids(html)
+        assert not ({"no_favicon", "no_canonical", "no_lang", "no_open_graph"} & ids)
+
+    def test_noindex_outweighs_the_cosmetic_checks(self):
+        """Severity ordering is the point of the penalties: being invisible to
+        search must not rank below a missing favicon."""
+        html = '<html><head><meta name="robots" content="noindex"></head><body></body></html>'
+        findings = {f["id"]: f["penalty"] for f in analyse(html, final_url="https://example.com")["findings"]}
+        assert findings["noindex"] > findings["no_favicon"]
+
+    def test_every_new_finding_carries_evidence(self):
+        """A finding with no evidence string cannot be quoted to a prospect,
+        which is the only reason these exist."""
+        result = analyse("<html><head></head><body></body></html>", final_url="https://example.com")
+        assert all(f["evidence"].strip() for f in result["findings"])

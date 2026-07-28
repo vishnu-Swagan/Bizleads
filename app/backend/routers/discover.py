@@ -30,7 +30,9 @@ from services.discovery_provider import (
 )
 from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
+from services.lead_angle import write_angle_note
 from services.leads import LeadsService
+from services import ai_writer
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +350,14 @@ MAX_QUALIFY_BATCH = 10
 # under the client's 120s timeout so a large batch returns a complete, honest
 # result instead of failing after the credits were already charged.
 AUDIT_BUDGET_SECONDS = 70.0
+
+# Separate, tighter budget for the AI angle notes, measured against the same
+# clock. Deliberately lower than the audit budget: audits are the paid-for
+# measurement and must get the lion's share of the request, whereas a note is
+# a convenience that the Notes tab can produce later on demand. Set so that a
+# full batch of ten still returns inside the client's 120s timeout even when
+# every audit ran long first.
+ANGLE_BUDGET_SECONDS = 90.0
 CREDITS_PER_QUALIFICATION = 1
 
 
@@ -400,6 +410,8 @@ async def qualify_leads(
     charged = 0
     started_at = monotonic()
     audits_skipped = 0
+    angles_written = 0
+    angles_skipped = 0
 
     for lead_id in data.lead_ids:
         lead = await service.get_by_id(lead_id, user_id=str(current_user.id))
@@ -449,6 +461,19 @@ async def qualify_leads(
         if measurement.get("contact_email") and not (lead.contact_email or "").strip():
             update["contact_email"] = measurement["contact_email"]
 
+        # Social presence, measured from the same page fetch. Only written
+        # when a page was actually read.
+        #
+        # social_platforms cannot itself express "never looked": the column
+        # defaults to '[]' and the save path writes '[]' on create, so an
+        # untouched lead is indistinguishable from one measured as having no
+        # links. `qualified_at` is what carries that distinction — it is NULL
+        # until a measurement runs — so the UI must gate on it before
+        # reporting "no social links found". Writing '[]' here regardless
+        # would make that gate meaningless.
+        if measurement.get("social_links") is not None:
+            update["social_platforms"] = json.dumps(measurement["social_links"])
+
         # findings/qualified_at follow the same rule: only persist them when
         # a website_score was actually established. A None score means the
         # measurement could not run (invalid/blocked/parked/unreachable), and
@@ -465,6 +490,30 @@ async def qualify_leads(
             )
 
         await service.update(lead_id, update, user_id=str(current_user.id))
+
+        # An angle note per measured lead, on the same budget discipline as
+        # the PageSpeed audit above and for the same reason: this adds a model
+        # round-trip per lead, and ten of them in series would run past the
+        # browser's patience on a bulk qualify. Once the budget is gone the
+        # remaining leads are measured and stored exactly as before, just
+        # without a note — the Notes tab can generate one on demand later.
+        #
+        # write_angle_note never raises and returns None when there is nothing
+        # honest to say, so nothing here can fail a qualification the user has
+        # already been charged for.
+        if (
+            measurement["website_score"] is not None
+            and ai_writer.is_ai_configured()
+            and (monotonic() - started_at) < ANGLE_BUDGET_SECONDS
+        ):
+            refreshed = await service.get_by_id(lead_id, user_id=str(current_user.id))
+            if refreshed is not None:
+                if await write_angle_note(db, refreshed, str(current_user.id)):
+                    angles_written += 1
+                else:
+                    angles_skipped += 1
+        elif measurement["website_score"] is not None:
+            angles_skipped += 1
 
         results.append(
             {
@@ -491,4 +540,10 @@ async def qualify_leads(
         "credits_charged": charged,
         "credits_remaining": workspace.monthly_credits - workspace.credits_used,
         "audit_available": is_pagespeed_configured(),
+        # Reported rather than silent: a batch that ran out of budget wrote
+        # fewer notes than leads, and the UI should be able to say so instead
+        # of leaving the user to wonder why some leads have an angle and
+        # others do not.
+        "angles_written": angles_written,
+        "angles_skipped": angles_skipped,
     }

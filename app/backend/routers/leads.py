@@ -33,6 +33,7 @@ class LeadsData(BaseModel):
     social_platforms: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
+    address: Optional[str] = None
     pipeline_stage: Optional[str] = None
     priority: Optional[str] = None
     notes_count: Optional[int] = None
@@ -60,6 +61,7 @@ class LeadsUpdateData(BaseModel):
     social_platforms: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
+    address: Optional[str] = None
     pipeline_stage: Optional[str] = None
     priority: Optional[str] = None
     notes_count: Optional[int] = None
@@ -82,6 +84,7 @@ class LeadsResponse(BaseModel):
     social_platforms: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
+    address: Optional[str] = None
     pipeline_stage: Optional[str] = None
     priority: Optional[str] = None
     notes_count: Optional[int] = None
