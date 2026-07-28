@@ -27,3 +27,10 @@ app/frontend/test-results/
 app/frontend/playwright-report/
 app/frontend/blob-report/
 app/frontend/.playwright/
+
+# Agent skill packages installed into the project (e.g. `npx skills add ...`).
+# Kept locally but out of the repository: one install added 4,064 files and
+# 47MB of GPU-computing toolkits unrelated to this product, and skills run
+# with full agent permissions, so vendoring them silently is a supply-chain
+# risk as much as a size one.
+.claude/skills/

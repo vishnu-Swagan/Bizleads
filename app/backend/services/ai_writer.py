@@ -65,7 +65,42 @@ _DEFAULT_TONE = "professional"
 
 def is_ai_configured() -> bool:
     """Whether an Anthropic key is present right now, read fresh each call."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    return bool(_provider()[1])
+
+
+# NVIDIA's hosted NIM catalogue speaks the OpenAI chat-completions dialect, so
+# it needs no bespoke client — only a different base URL, auth header and
+# response shape. Any other OpenAI-compatible endpoint works through the same
+# path by setting OPENAI_BASE_URL.
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"
+
+
+def _provider() -> tuple[str, str]:
+    """Which provider to use, and its key. Chosen by what is configured.
+
+    Anthropic wins when both are present because it follows the
+    anti-fabrication instruction markedly more reliably, and that instruction
+    is the only thing standing between this feature and the invented claims
+    the product exists to avoid.
+    """
+    anthropic = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic:
+        return "anthropic", anthropic
+    nvidia = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if nvidia:
+        return "nvidia", nvidia
+    return "none", ""
+
+
+def active_model() -> Optional[str]:
+    """The model that would actually be used, for the status endpoint."""
+    name, key = _provider()
+    if name == "anthropic":
+        return MODEL
+    if name == "nvidia":
+        return os.environ.get("NVIDIA_MODEL", "").strip() or DEFAULT_NVIDIA_MODEL
+    return None
 
 
 # --- category-specific register -------------------------------------------
@@ -248,14 +283,57 @@ def _parse_subject_body(text: str) -> Optional[Dict[str, str]]:
 
 # --- the one HTTP call point ------------------------------------------------
 
-async def _call_anthropic(system: str, user_content: str) -> Optional[str]:
-    """POST to the Messages API. Returns cleaned text, or None on any failure.
+async def _call_nvidia(api_key: str, system: str, user_content: str) -> Optional[str]:
+    """POST to NVIDIA NIM, which speaks OpenAI chat-completions.
 
-    The key is read here, at call time, from os.environ - never cached.
+    The system prompt becomes a system message rather than a top-level field,
+    and the text sits at choices[0].message.content. Everything else — the
+    anti-fabrication rules, the findings block, the degrade-on-failure
+    contract — is identical, because those live above this layer.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    body = {
+        "model": active_model(),
+        "max_tokens": _MAX_TOKENS,
+        # Low temperature deliberately. This task is constrained rewriting,
+        # not invention, and a creative sampler is exactly what starts adding
+        # flattering details nobody measured.
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                NVIDIA_API_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "content-type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+        text = data["choices"][0]["message"]["content"]
+    except Exception:  # noqa: BLE001 - must degrade, never raise
+        logger.exception("NVIDIA NIM call failed; degrading to no AI assist")
+        return None
+
+    return _clean_model_text(text) if isinstance(text, str) else None
+
+
+async def _call_anthropic(system: str, user_content: str) -> Optional[str]:
+    """POST to whichever provider is configured. Returns text, or None.
+
+    Keeps its original name because every caller and test already uses it;
+    the provider choice happens here rather than at each call site.
+    """
+    provider, api_key = _provider()
     if not api_key:
         return None
+    if provider == "nvidia":
+        return await _call_nvidia(api_key, system, user_content)
 
     headers = {
         "x-api-key": api_key,

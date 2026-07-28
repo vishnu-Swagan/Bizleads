@@ -110,7 +110,17 @@ services:
       # findings produces no email at all: the provider is not even called.
       # That is what keeps "every claim is verifiable" true once a language
       # model is in the loop.
+      # Either provider works. Anthropic is preferred when both are set,
+      # because it follows the "add no facts" instruction markedly more
+      # reliably — and that instruction is the only thing standing between
+      # this feature and the invented claims the product exists to avoid.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # NVIDIA NIM (build.nvidia.com) is free and OpenAI-compatible.
+      - key: NVIDIA_API_KEY
+        sync: false
+      # Optional. Defaults to meta/llama-3.3-70b-instruct.
+      - key: NVIDIA_MODEL
         sync: false
 
       # --- Stripe billing ---
