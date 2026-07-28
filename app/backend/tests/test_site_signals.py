@@ -7,6 +7,8 @@ Two properties matter and are tested separately:
      must never score worse than a measured good one — that is the same
      unknown-as-known defect this codebase has been removing throughout.
 """
+import json
+
 from services.site_signals import analyse, extract_signals, score_signals
 
 # A genuinely well-built page, not merely an inoffensive one. It gained a lang
@@ -224,3 +226,114 @@ class TestTheSecondTierOfChecks:
         which is the only reason these exist."""
         result = analyse("<html><head></head><body></body></html>", final_url="https://example.com")
         assert all(f["evidence"].strip() for f in result["findings"])
+
+
+class TestPhoneExtraction:
+    """A wrong number means cold-calling a stranger about somebody else's
+    business, so the extractor is deliberately narrow: a tel: link is a number
+    the business published and marked callable."""
+
+    def _phone(self, html):
+        return extract_signals(html, final_url="https://example.com")["contact_phone"]
+
+    def test_it_reads_a_tel_link(self):
+        assert self._phone('<a href="tel:+441618349644">Call</a>') == "+441618349644"
+
+    def test_readability_separators_are_stripped(self):
+        assert self._phone('<a href="tel:+44 161 834-9644">Call</a>') == "+441618349644"
+
+    def test_a_bracketed_trunk_prefix_is_dropped(self):
+        """"+44 (0)161..." is written that way to say "omit the 0 when
+        dialling internationally". Keeping it produces +4401618349644, which
+        does not connect."""
+        assert self._phone('<a href="tel:+44 (0)161 834 9644">Call</a>') == "+441618349644"
+
+    def test_a_leading_zero_without_a_plus_is_kept(self):
+        """A national-format number has no + to make the trunk prefix
+        redundant, so removing it would break the number instead of fixing
+        it."""
+        assert self._phone('<a href="tel:0161 834 9644">Call</a>') == "01618349644"
+
+    def test_a_number_in_prose_is_not_extracted(self):
+        """The whole reason for the tel: restriction: digits in text are
+        prices, dates and registration numbers far more often than phones."""
+        assert self._phone("<p>Company no. 01234567, est. 1969, from £25.00</p>") is None
+
+    def test_a_shortcode_is_rejected(self):
+        assert self._phone('<a href="tel:999">Emergency</a>') is None
+
+    def test_an_over_length_number_is_rejected(self):
+        """E.164 tops out at 15 digits; longer is not a phone number."""
+        assert self._phone('<a href="tel:+1234567890123456789">x</a>') is None
+
+    def test_pause_and_wait_signalling_is_dropped(self):
+        assert self._phone('<a href="tel:+441618349644,,123">Call</a>') == "+441618349644"
+
+    def test_the_first_of_several_wins(self):
+        html = '<a href="tel:+441618349644">A</a><a href="tel:+442079460958">B</a>'
+        assert self._phone(html) == "+441618349644"
+
+    def test_a_non_uk_number_works_the_same(self):
+        """The point of reading the page rather than the listing provider:
+        provider phone coverage varies by country, a business's own site does
+        not."""
+        assert self._phone('<a href="tel:+81352962345">電話</a>') == "+81352962345"
+
+
+class TestPostalAddressExtraction:
+    """Structured data only. A wrong address sends post, or a person, to the
+    wrong place — free-text parsing is unreliable in one country and hopeless
+    across twenty."""
+
+    def _addr(self, html):
+        return extract_signals(html, final_url="https://example.com")["postal_address"]
+
+    def test_it_reads_a_json_ld_postal_address(self):
+        html = '''<script type="application/ld+json">
+        {"@type":"Restaurant","name":"Riverside Cafe","address":{
+          "@type":"PostalAddress","streetAddress":"12 Mill Lane",
+          "addressLocality":"Leeds","postalCode":"LS1 4AB",
+          "addressCountry":"GB"}}</script>'''
+        assert self._addr(html) == "12 Mill Lane, Leeds, LS1 4AB, GB"
+
+    def test_a_nested_country_object_is_flattened(self):
+        html = '''<script type="application/ld+json">
+        {"@type":"PostalAddress","streetAddress":"1 Rue de Rivoli",
+         "addressLocality":"Paris",
+         "addressCountry":{"@type":"Country","name":"France"}}</script>'''
+        assert self._addr(html) == "1 Rue de Rivoli, Paris, France"
+
+    def test_it_finds_an_address_inside_an_at_graph(self):
+        html = '''<script type="application/ld+json">
+        {"@context":"https://schema.org","@graph":[
+          {"@type":"WebSite","name":"x"},
+          {"@type":"LocalBusiness","address":{"@type":"PostalAddress",
+            "streetAddress":"5 Hauptstrasse","addressLocality":"Berlin"}}]}</script>'''
+        assert self._addr(html) == "5 Hauptstrasse, Berlin"
+
+    def test_an_address_given_as_a_plain_string_is_kept(self):
+        html = '''<script type="application/ld+json">
+        {"@type":"LocalBusiness","address":"22 Bridge St, Cork"}</script>'''
+        assert self._addr(html) == "22 Bridge St, Cork"
+
+    def test_no_structured_data_means_no_address(self):
+        assert self._addr("<footer>12 Mill Lane, Leeds LS1 4AB</footer>") is None
+
+    def test_one_malformed_block_does_not_stop_the_others(self):
+        """Hand-written JSON-LD is very often slightly invalid."""
+        html = '''<script type="application/ld+json">{trailing,,}</script>
+        <script type="application/ld+json">
+        {"@type":"PostalAddress","streetAddress":"9 Kloof St",
+         "addressLocality":"Cape Town"}</script>'''
+        assert self._addr(html) == "9 Kloof St, Cape Town"
+
+    def test_deep_nesting_terminates(self):
+        """A hostile or broken document must not spend the request budget in
+        a recursion."""
+        deep = {"a": {}}
+        node = deep["a"]
+        for _ in range(50):
+            node["a"] = {}
+            node = node["a"]
+        html = f'<script type="application/ld+json">{json.dumps(deep)}</script>'
+        assert self._addr(html) is None

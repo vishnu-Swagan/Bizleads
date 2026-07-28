@@ -455,11 +455,22 @@ async def qualify_leads(
             # The URL after redirects — what was actually measured.
             update["website_url"] = measurement["website_url"]
 
-        # Fill in a contact address found on the site, but never overwrite one
-        # that is already there: a user-entered address, or one they corrected,
-        # outranks anything scraped from a page.
+        # Fill in contact details found on the site, but never overwrite one
+        # that is already there: a value the provider supplied, or one the
+        # user entered or corrected, outranks anything scraped from a page.
+        #
+        # This is what makes phone and address work outside the provider's
+        # strong markets. MapBox carries a phone for some countries and an
+        # address for some, so a provider-only pipeline left most non-UK/US
+        # leads unreachable; the business's own page does not vary that way.
         if measurement.get("contact_email") and not (lead.contact_email or "").strip():
             update["contact_email"] = measurement["contact_email"]
+
+        if measurement.get("contact_phone") and not (lead.contact_phone or "").strip():
+            update["contact_phone"] = measurement["contact_phone"]
+
+        if measurement.get("postal_address") and not (lead.address or "").strip():
+            update["address"] = measurement["postal_address"]
 
         # Social presence, measured from the same page fetch. Only written
         # when a page was actually read.

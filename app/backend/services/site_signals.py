@@ -17,6 +17,7 @@ second costs some search traffic.
 Every finding carries the evidence that produced it, so "Why this score?" can
 show a fact rather than a number.
 """
+import json
 import re
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -81,6 +82,167 @@ def _first_email(html: str) -> Optional[str]:
     return None
 
 
+_TEL_PATTERN = re.compile(r"""href=["']\s*tel:([^"']+)["']""", re.I)
+
+
+def _first_phone(html: str) -> Optional[str]:
+    """The first plausible phone number in a tel: link.
+
+    Restricted to tel: hrefs for the same reason _first_email is restricted to
+    mailto: — a loose scan of page text for digit runs picks up prices, dates,
+    opening hours, VAT and company registration numbers, and a wrong number
+    means cold-calling a stranger about a business that is not theirs. A tel:
+    link is a number the business chose to publish and marked as callable.
+
+    Works in every country, which is the point: the listing provider carries a
+    phone number for some markets and not others, whereas this reads the
+    business's own page. Format is preserved rather than normalised to E.164 —
+    reformatting requires knowing the country's dialling rules, and getting
+    that wrong silently corrupts a working number. Only separators a human
+    added for readability are removed.
+    """
+    for match in _TEL_PATTERN.finditer(html or ""):
+        raw = match.group(1).strip()
+        cleaned = re.sub(r"^tel:", "", raw, flags=re.I).strip()
+        # "+44 (0)161 834 9644" — the bracketed zero is a national trunk
+        # prefix, written in parentheses precisely to say "omit this when
+        # dialling internationally". Keeping it yields +4401618349644, which
+        # does not connect. Dropping it is safe in a way that general
+        # reformatting is not: the notation is country-independent, and it
+        # only applies when a + is present to make the number international.
+        if cleaned.startswith("+"):
+            cleaned = re.sub(r"\(\s*0\s*\)", "", cleaned, count=1)
+        # Now the separators a human added for readability.
+        cleaned = re.sub(r"[\s().\-/]", "", cleaned)
+        # An extension is a real part of the number; anything after a comma or
+        # semicolon is pause/wait signalling that does not belong in a stored
+        # contact number.
+        cleaned = re.split(r"[,;]", cleaned)[0]
+        digits = re.sub(r"\D", "", cleaned)
+        # E.164 allows up to 15 digits. Below 7 is a shortcode or a fragment,
+        # not a business line somebody can be reached on.
+        if not 7 <= len(digits) <= 15:
+            continue
+        # Anything other than digits and one leading + is not a phone number.
+        if not re.fullmatch(r"\+?\d+", cleaned):
+            continue
+        return cleaned
+    return None
+
+
+# Keys schema.org uses for the parts of a postal address, in the order they
+# are conventionally written. Country last, matching how an address is
+# addressed rather than how JSON-LD happens to order its keys.
+_ADDRESS_PARTS = (
+    "streetAddress",
+    "addressLocality",
+    "addressRegion",
+    "postalCode",
+    "addressCountry",
+)
+
+
+def _flatten_address(node: Any) -> Optional[str]:
+    """Render one schema.org PostalAddress node as a single line."""
+    if isinstance(node, str):
+        return node.strip() or None
+    if not isinstance(node, dict):
+        return None
+
+    parts = []
+    for key in _ADDRESS_PARTS:
+        value = node.get(key)
+        # addressCountry is frequently a nested Country object rather than a
+        # string, and addressRegion occasionally is too.
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("@id")
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return ", ".join(parts) or None
+
+
+def _walk_for_address(node: Any, depth: int = 0) -> Optional[str]:
+    """Find the first PostalAddress anywhere in a decoded JSON-LD document.
+
+    Depth-limited because JSON-LD in the wild nests arbitrarily — @graph
+    inside @graph, publisher inside organization inside webpage — and a
+    malformed or hostile document must not be able to spend the request's
+    budget in a recursion.
+    """
+    if depth > 6:
+        return None
+
+    if isinstance(node, list):
+        for item in node:
+            found = _walk_for_address(item, depth + 1)
+            if found:
+                return found
+        return None
+
+    # Reached when an `address` was given as a plain string rather than a
+    # PostalAddress object, which schema.org permits and plenty of sites do.
+    # Only trusted at depth: a bare string at the document root is some other
+    # field entirely, not an address.
+    if isinstance(node, str):
+        return _flatten_address(node) if depth else None
+
+    if not isinstance(node, dict):
+        return None
+
+    node_type = node.get("@type")
+    types = node_type if isinstance(node_type, list) else [node_type]
+    if any(isinstance(t, str) and t.endswith("PostalAddress") for t in types):
+        return _flatten_address(node)
+
+    # An `address` on an Organization/LocalBusiness is the common shape.
+    if "address" in node:
+        found = _walk_for_address(node["address"], depth + 1)
+        if found:
+            return found
+
+    for key, value in node.items():
+        if key in ("@type", "@context"):
+            continue
+        if isinstance(value, (dict, list)):
+            found = _walk_for_address(value, depth + 1)
+            if found:
+                return found
+    return None
+
+
+_JSONLD_PATTERN = re.compile(
+    r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
+    re.I | re.S,
+)
+
+
+def _postal_address(html: str) -> Optional[str]:
+    """A postal address from the page's own schema.org markup.
+
+    Structured data only — no attempt to guess an address out of footer prose.
+    Free-text address parsing is unreliable in one country and hopeless across
+    twenty, and a wrong address is worse than none: it sends post, or a person,
+    somewhere that is not the business.
+
+    A site that publishes PostalAddress markup has stated the address itself,
+    which is the same standard the email and phone extractors hold to.
+    """
+    for match in _JSONLD_PATTERN.finditer(html or ""):
+        block = match.group(1).strip()
+        if not block:
+            continue
+        try:
+            data = json.loads(block)
+        except (json.JSONDecodeError, ValueError):
+            # Hand-written JSON-LD is very often slightly invalid. One bad
+            # block must not stop the others being read.
+            continue
+        found = _walk_for_address(data)
+        if found:
+            return found
+    return None
+
+
 def extract_signals(
     html: str,
     *,
@@ -125,6 +287,13 @@ def extract_signals(
         # The page has already been fetched and parsed for the checks above,
         # so this costs nothing extra and involves no additional request.
         "contact_email": _first_email(html),
+        # Phone and address are read off the page for the same reason the
+        # email is: the listing provider carries them for some countries and
+        # not others, so a provider-only pipeline leaves most non-UK/US leads
+        # with no way to reach the business at all. The page belongs to the
+        # business regardless of which market it trades in.
+        "contact_phone": _first_phone(html),
+        "postal_address": _postal_address(html),
         "has_schema_markup": "application/ld+json" in low or "itemtype=" in low,
         "is_wordpress": "wp-content" in low or "wp-includes" in low,
         "jquery_major": int(jquery.group(1)) if jquery else None,

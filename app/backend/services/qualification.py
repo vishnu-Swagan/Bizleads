@@ -91,6 +91,12 @@ async def qualify_website(raw_url: Optional[str], *, allow_audit: bool = True) -
         # supplies one, so without this a qualified lead still has no
         # recipient and outreach cannot be drafted for it at all.
         "contact_email": None,
+        # Phone and postal address published on the site itself. The listing
+        # provider supplies a phone for some countries and an address for
+        # some, inconsistently; these come from the business's own page and
+        # so behave the same in every market.
+        "contact_phone": None,
+        "postal_address": None,
         # Which social platforms the site links to. Measured the same way as
         # everything else here — from the page already fetched — and kept as
         # None rather than [] until a page has actually been read, so "no
@@ -150,6 +156,8 @@ async def qualify_website(raw_url: Optional[str], *, allow_audit: bool = True) -
         result["website_state"] = heuristic["website_state"]
         result["findings"] = heuristic["findings"]
         result["contact_email"] = heuristic["signals"].get("contact_email")
+        result["contact_phone"] = heuristic["signals"].get("contact_phone")
+        result["postal_address"] = heuristic["signals"].get("postal_address")
         result["social_links"] = heuristic["signals"].get("social_links") or []
         result["evidence"]["heuristic"] = {
             "signals": heuristic["signals"],
