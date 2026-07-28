@@ -14,7 +14,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
-import { revenueCatPurchaseUrl } from '@/lib/revenuecat';
+import {
+  isRevenueCatUserCancellation,
+  presentRevenueCatPaywall,
+  revenueCatPurchaseUrl,
+} from '@/lib/revenuecat';
 import {
   CreditCard, Settings as SettingsIcon, Users, CheckCircle2, ArrowRight, Loader2,
   Mail, XCircle, AlertTriangle, ExternalLink, Send, ShieldAlert, Trash2,
@@ -280,6 +284,30 @@ export default function AppSettings() {
   const handleUpgrade = async (plan: string) => {
     setUpgrading(plan);
     try {
+      if (user) {
+        try {
+          const purchase = await presentRevenueCatPaywall({
+            userId: user.id,
+            email: user.email,
+          });
+
+          if (purchase) {
+            toast.success(
+              `${purchase.selectedPackage.webBillingProduct.displayName} activated. Your credits are syncing now.`,
+            );
+            await fetchUsage();
+            return;
+          }
+        } catch (err) {
+          if (isRevenueCatUserCancellation(err)) return;
+
+          // A published hosted link is the next-safe checkout path if the SDK,
+          // offering, or remote paywall is temporarily unavailable.
+          console.error('RevenueCat paywall failed; using hosted checkout:', err);
+          toast.info('Opening secure checkout in a new page.');
+        }
+      }
+
       const hostedPurchaseUrl = user
         ? revenueCatPurchaseUrl({
             userId: user.id,

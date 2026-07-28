@@ -6,6 +6,7 @@ import React, {
   ReactNode,
 } from 'react';
 import { client } from '@/lib/api';
+import { initializeRevenueCat } from '@/lib/revenuecat';
 
 interface User {
   id: string;
@@ -78,6 +79,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       checkAuthStatus();
     });
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // RevenueCat must use the same stable Supabase UUID that the backend puts
+    // in Stripe metadata. Configuration is non-blocking: authentication and
+    // the rest of the app continue to work if the remote SDK is unavailable.
+    void initializeRevenueCat(user.id).catch((err) => {
+      console.error('RevenueCat SDK initialization failed:', err);
+    });
+  }, [user?.id]);
 
   const value: AuthContextType = {
     user,
