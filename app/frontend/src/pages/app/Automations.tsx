@@ -21,10 +21,11 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import {
   CheckCircle2, XCircle, Mail, Send, Loader2, ExternalLink, Sparkles,
   AlertCircle, CalendarClock, Plus, Play, Pencil, Trash2, Inbox, X,
-  Wand2, Undo2, Bot,
+  Wand2, Undo2, Bot, Clock, ListChecks,
 } from 'lucide-react';
 
 /**
@@ -123,6 +124,15 @@ interface Automation {
   next_run_at: string | null;
   last_run_summary: string | null;
   last_run_error: string | null;
+}
+
+/** GET /api/v1/automations/setup-status — booleans only, never the secret. */
+interface SetupStatus {
+  sending_account_configured: boolean;
+  automation_count: number;
+  scheduled_automation_count: number;
+  unattended_runs_enabled: boolean;
+  ai_wording_available: boolean;
 }
 
 /** A pending draft in the approval queue, awaiting a human Send/Discard. */
@@ -340,6 +350,7 @@ export default function AppAutomations() {
     ? 'Checking AI availability…'
     : 'AI writing help is not configured for this workspace.';
 
+
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -391,9 +402,67 @@ export default function AppAutomations() {
 
   // Approval queue.
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  // Drafts set aside rather than sent or discarded. Kept visible so Skip is a
+  // genuine "not now" rather than a quieter Discard.
+  const [skippedDrafts, setSkippedDrafts] = useState<QueueItem[]>([]);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [queueLoading, setQueueLoading] = useState(true);
   const [queueBusyIds, setQueueBusyIds] = useState<Set<number>>(new Set());
   const [queueSendingAll, setQueueSendingAll] = useState(false);
+
+  /**
+   * The setup guide's steps, derived from live state rather than stored.
+   *
+   * Only the first three gate whether automation works, so only they count
+   * toward completion. Unattended runs are listed because their absence is
+   * genuinely surprising — a "Daily" schedule that only advances when someone
+   * opens the page looks broken — but it is an operator-side setting, so it
+   * is described rather than given an action the reader cannot take.
+   */
+  const setupSteps = [
+    {
+      key: 'sending',
+      done: !!setupStatus?.sending_account_configured,
+      title: 'Connect the address your outreach sends from',
+      detail:
+        'Every account sends from its own mailbox, so nothing can be sent until you add one. Stored encrypted.',
+      action: {
+        label: 'Set up sending →',
+        onClick: () => navigate('/app/settings/workspace'),
+      },
+    },
+    {
+      key: 'leads',
+      done: (setupStatus?.automation_count ?? 0) > 0 || leads.length > 0,
+      title: 'Save and qualify some leads',
+      detail:
+        'Discover finds businesses; Qualify measures their sites. Those measurements are what every draft is written from — a lead with nothing measured gets no email.',
+      action: { label: 'Go to Discover →', onClick: () => navigate('/app/discover') },
+    },
+    {
+      key: 'schedule',
+      done: (setupStatus?.scheduled_automation_count ?? 0) > 0,
+      title: 'Create an automation with a schedule',
+      detail:
+        'Give it a search and set it to daily or weekly. It will search, qualify and draft on its own — drafts always wait here for your approval.',
+      action: null,
+    },
+    {
+      key: 'unattended',
+      done: !!setupStatus?.unattended_runs_enabled,
+      title: 'Unattended runs',
+      detail:
+        'Not enabled, so schedules advance when you open this page rather than on their own. Everything else works normally; this is a server-side setting.',
+      action: null,
+    },
+  ];
+
+  // Deliberately ignores the unattended step: it is operator-side, and a
+  // guide that can never be finished by the person reading it would sit on
+  // the page forever.
+  const setupComplete = setupSteps
+    .filter((s) => s.key !== 'unattended')
+    .every((s) => s.done);
 
   // Per-queue-item AI state, keyed by draft id.
   const [queueTone, setQueueTone] = useState<Record<number, Tone>>({});
@@ -407,6 +476,7 @@ export default function AppAutomations() {
       void loadAiStatus();
       void loadLeads();
       void loadFilters();
+      void loadSetupStatus();
       void loadAutomations().then(() => void catchUpDueAutomations());
       void loadQueue();
     }
@@ -510,8 +580,13 @@ export default function AppAutomations() {
     try {
       const res = await client.apiCall.invoke({ url: '/api/v1/outreach/queue', method: 'GET', data: {} });
       setQueue(Array.isArray(res.data) ? res.data : res.data?.items ?? []);
+      // Skipped drafts ride along in the same response, so restoring one
+      // needs no extra request and the two lists can never disagree about
+      // which draft is where.
+      setSkippedDrafts(res.data?.skipped ?? []);
     } catch {
       setQueue([]);
+      setSkippedDrafts([]);
     } finally {
       setQueueLoading(false);
     }
@@ -686,6 +761,60 @@ export default function AppAutomations() {
       }
     } catch (err: any) {
       toast.error(err?.data?.detail ?? 'Failed to send');
+      setQueueBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const loadSetupStatus = async () => {
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/automations/setup-status', method: 'GET', data: {},
+      });
+      setSetupStatus(res.data);
+    } catch {
+      // A failed check must not render a guide that guesses. Left null, the
+      // card simply does not appear — claiming a step is incomplete when it
+      // may be done is worse than staying quiet.
+      setSetupStatus(null);
+    }
+  };
+
+  /** Set a draft aside. Reversible — see restoreQueueItem. */
+  const skipQueueItem = async (item: QueueItem) => {
+    setQueueBusyIds((prev) => new Set(prev).add(item.id));
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/outreach/queue/${item.id}/skip`, method: 'POST', data: {},
+      });
+      await loadQueue();
+      toast.success('Skipped — restore it any time below.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Failed to skip');
+    } finally {
+      setQueueBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  /** Put a skipped draft back in the queue. */
+  const restoreQueueItem = async (item: QueueItem) => {
+    setQueueBusyIds((prev) => new Set(prev).add(item.id));
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/outreach/queue/${item.id}/restore`, method: 'POST', data: {},
+      });
+      await loadQueue();
+      toast.success('Back in the queue.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Failed to restore');
+    } finally {
       setQueueBusyIds((prev) => {
         const next = new Set(prev);
         next.delete(item.id);
@@ -1059,9 +1188,19 @@ export default function AppAutomations() {
                 {loading ? (
                   <Skeleton className="h-4 w-40" />
                 ) : status?.configured ? (
+                  // The address is per-account and editable, but reading it as
+                  // plain text made it look like a fixed property of the
+                  // product. Linking it to the editor is the whole fix — the
+                  // capability was already there.
                   <span className="text-sm text-slate-600">
                     Sending as{' '}
-                    <strong className="text-slate-900">{status.from_email}</strong>
+                    <button
+                      onClick={() => navigate('/app/settings/workspace')}
+                      className="font-medium text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-900"
+                      title="Change your sending address"
+                    >
+                      {status.from_email}
+                    </button>
                   </span>
                 ) : (
                   <span className="text-sm text-slate-600">
@@ -1081,10 +1220,14 @@ export default function AppAutomations() {
                 {aiStatusLoading ? (
                   <Skeleton className="h-4 w-32" />
                 ) : (
+                  // The model name is deliberately not shown. Which model
+                  // serves a request is an operator's deployment choice, not a
+                  // fact about the customer's account, and naming it invites
+                  // questions nobody using the product can act on. It is still
+                  // returned by the authenticated /ai/status endpoint, which
+                  // is where it is useful when output reads oddly.
                   <span className="text-sm text-slate-600">
-                    {aiAvailable
-                      ? <>Wording help on <span className="text-slate-900">{aiStatus?.model}</span></>
-                      : 'Wording help unavailable'}
+                    {aiAvailable ? 'Wording help on' : 'Wording help unavailable'}
                   </span>
                 )}
               </div>
@@ -1530,12 +1673,27 @@ export default function AppAutomations() {
                           )}
                           {actionBusy ? 'Sending...' : 'Send'}
                         </Button>
+                        {/* Skip sits before Discard deliberately: it is the
+                            reversible one, and on a bulk review surface the
+                            recoverable action should be the easier reach. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => skipQueueItem(item)}
+                          disabled={rowLocked}
+                          className="border-slate-200 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                          title="Set aside without sending — you can restore it later"
+                        >
+                          <Clock className="h-3.5 w-3.5" />
+                          Skip
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => discardQueueItem(item)}
                           disabled={rowLocked}
-                          className="border-slate-200 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                          className="border-slate-200 gap-1.5 cursor-pointer disabled:cursor-not-allowed text-slate-500"
+                          title="Delete this draft permanently"
                         >
                           <X className="h-3.5 w-3.5" />
                           Discard
@@ -1560,8 +1718,110 @@ export default function AppAutomations() {
                 })}
               </div>
             )}
+
+            {/* Skipped drafts, offered back. Without this the Skip button
+                would be a Discard with softer wording — a set-aside draft the
+                user cannot find again was not set aside, it was thrown away. */}
+            {skippedDrafts.length > 0 && (
+              <div className="mt-6 border-t border-slate-100 pt-4">
+                <p className="text-sm font-medium text-slate-700 mb-2">
+                  {skippedDrafts.length} skipped
+                </p>
+                <div className="space-y-2">
+                  {skippedDrafts.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-700 truncate">
+                          {item.business_name || item.to_email}
+                        </p>
+                        <p className="text-xs text-slate-500 truncate">{item.subject}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => restoreQueueItem(item)}
+                        disabled={queueBusyIds.has(item.id)}
+                        className="border-slate-200 shrink-0 cursor-pointer"
+                      >
+                        {queueBusyIds.has(item.id) ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          'Restore'
+                        )}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        {/* Setup guide.
+            Checks live state instead of describing steps. A written guide
+            goes stale the moment the deployment or the UI changes, and the
+            reader cannot tell which steps still apply to them; this reads the
+            same state the features read, so it cannot claim something is done
+            when the feature disagrees. It hides itself once everything is
+            configured rather than becoming permanent furniture. */}
+        {setupStatus && !setupComplete && (
+          <Card className="border-indigo-200 bg-indigo-50/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <ListChecks className="h-4 w-4 text-indigo-600" />
+                Finish setting up automation
+              </CardTitle>
+              <CardDescription>
+                An automation searches on a schedule, measures what it finds, and writes drafts
+                here for you to approve. These are the steps still outstanding.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-3">
+                {setupSteps.map((step, i) => (
+                  <li key={step.key} className="flex gap-3">
+                    <span
+                      className={cn(
+                        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-medium mt-0.5',
+                        step.done
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-slate-200 text-slate-600',
+                      )}
+                    >
+                      {step.done ? <CheckCircle2 className="h-3.5 w-3.5" /> : i + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p
+                        className={cn(
+                          'text-sm font-medium',
+                          step.done ? 'text-slate-400 line-through' : 'text-slate-800',
+                        )}
+                      >
+                        {step.title}
+                      </p>
+                      {!step.done && (
+                        <>
+                          <p className="text-sm text-slate-600 mt-0.5">{step.detail}</p>
+                          {step.action && (
+                            <button
+                              onClick={step.action.onClick}
+                              className="text-sm text-indigo-600 hover:underline font-medium mt-1"
+                            >
+                              {step.action.label}
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Evidence-based drafting: the actual automation. */}
         <Card className="border-slate-200">

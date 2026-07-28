@@ -294,11 +294,16 @@ async def compose_drafts(
         # Re-composing a lead replaces its unsent draft rather than stacking a
         # second one. Two pending emails to the same prospect is the failure
         # nobody notices until both have been sent.
+        #
+        # Skipped drafts are cleared too. A skipped draft is one the user set
+        # aside; a freshly composed one supersedes it, and leaving both would
+        # offer to restore a stale version of an email that has already been
+        # rewritten.
         existing = await db.execute(
             select(Outreach_drafts).where(
                 Outreach_drafts.user_id == str(current_user.id),
                 Outreach_drafts.lead_id == draft["lead_id"],
-                Outreach_drafts.status == "pending",
+                Outreach_drafts.status.in_(("pending", "skipped")),
             )
         )
         for stale in existing.scalars().all():
@@ -579,9 +584,26 @@ async def get_outreach_queue(
         .limit(limit)
     )
     rows = result.all()
+
+    # Skipped drafts ride along rather than needing a second request. They are
+    # set aside, not gone, so the queue has to be able to offer them back —
+    # and a "3 skipped" line the user can act on is the only thing that stops
+    # Skip from feeling like a quieter Discard.
+    skipped_result = await db.execute(
+        select(Outreach_drafts, Leads.business_name)
+        .outerjoin(Leads, Leads.id == Outreach_drafts.lead_id)
+        .where(Outreach_drafts.user_id == current_user.id, Outreach_drafts.status == "skipped")
+        .order_by(Outreach_drafts.id.desc())
+        .limit(limit)
+    )
+
     return {
         "items": [_draft_dict(draft, business_name) for draft, business_name in rows],
         "total": len(rows),
+        "skipped": [
+            _draft_dict(draft, business_name)
+            for draft, business_name in skipped_result.all()
+        ],
     }
 
 
@@ -634,6 +656,56 @@ async def discard_queued_draft(
         raise HTTPException(status_code=400, detail=f"Draft is already {draft.status}, not pending")
 
     draft.status = "discarded"
+    await db.commit()
+    await db.refresh(draft)
+    return _draft_dict(draft)
+
+
+@router.post("/queue/{draft_id}/skip")
+async def skip_queued_draft(
+    draft_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set a draft aside without sending or destroying it.
+
+    Distinct from discard on purpose. Discard is a verdict — this prospect is
+    not worth writing to — and is final. Skip is "not now": the draft leaves
+    the queue so it stops demanding a decision, and can be restored.
+
+    Without this the only way to clear a draft you did not want to send today
+    was to discard it, which meant re-composing later to get it back. A
+    reversible action is the right default for a bulk review surface, where a
+    misclick costs nothing to undo and everything to redo.
+    """
+    draft = await _get_owned_draft(db, draft_id, current_user.id)
+    if draft.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Draft is already {draft.status}, not pending")
+
+    draft.status = "skipped"
+    await db.commit()
+    await db.refresh(draft)
+    return _draft_dict(draft)
+
+
+@router.post("/queue/{draft_id}/restore")
+async def restore_skipped_draft(
+    draft_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Put a skipped draft back in the queue.
+
+    Only `skipped` can be restored. A sent draft cannot be un-sent, and
+    restoring a discarded one would undo a decision the user made
+    deliberately — if they want it back, re-composing writes it from the same
+    findings anyway.
+    """
+    draft = await _get_owned_draft(db, draft_id, current_user.id)
+    if draft.status != "skipped":
+        raise HTTPException(status_code=400, detail=f"Draft is {draft.status}, not skipped")
+
+    draft.status = "pending"
     await db.commit()
     await db.refresh(draft)
     return _draft_dict(draft)

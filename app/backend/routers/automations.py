@@ -22,13 +22,64 @@ from core.database import get_db
 from dependencies.auth import get_current_user
 from models.automations import Automations
 from schemas.auth import UserResponse
+from services import ai_writer
 from services.automation_runner import run_automation
+from services.email_identity import resolve_identity
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/automations", tags=["automations"])
 
 VALID_SCHEDULES = {"manual", "daily", "weekly"}
+
+
+@router.get("/setup-status")
+async def setup_status(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """What is and is not yet configured for automation to work end to end.
+
+    Exists so the setup guide can check reality instead of describing steps.
+    A written guide goes stale the moment the UI or the deployment changes;
+    this reads the same state the features themselves read, so it cannot
+    disagree with them.
+
+    Booleans only. `unattended_runs_enabled` reports whether
+    AUTOMATION_CRON_SECRET is set, never any part of its value — the point of
+    the secret is that it is not readable, and an endpoint that leaked a
+    prefix would hand an attacker the ability to spend every account's
+    credits.
+
+    Note this route is declared before /{automation_id}: FastAPI matches in
+    declaration order, so registering it after would let the dynamic route
+    swallow "setup-status" and try to parse it as an id.
+    """
+    import os
+
+    result = await db.execute(
+        select(Automations).where(Automations.user_id == current_user.id)
+    )
+    automations = list(result.scalars().all())
+
+    scheduled = [
+        a for a in automations
+        if a.schedule and a.schedule != "manual" and a.enabled
+    ]
+
+    identity = await resolve_identity(db, current_user.id)
+
+    return {
+        # Outreach cannot send at all without this — it is the first real gate.
+        "sending_account_configured": identity is not None,
+        "automation_count": len(automations),
+        "scheduled_automation_count": len(scheduled),
+        # Without the shared secret nothing fires a schedule unattended. The
+        # feature still works when someone opens the page, which is why this
+        # is reported as a distinct fact rather than folded into the above.
+        "unattended_runs_enabled": bool(os.environ.get("AUTOMATION_CRON_SECRET", "").strip()),
+        "ai_wording_available": ai_writer.is_ai_configured(),
+    }
 
 
 def _initial_next_run_at(schedule: str) -> Optional[datetime]:

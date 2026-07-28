@@ -508,21 +508,22 @@ export default function AppDiscover() {
               <CardTitle className="text-base text-slate-900">No discovery provider connected</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* This used to say "Add a MapBox access token to enable
+                  searching" above a Go to Settings button. Neither was
+                  actionable: discovery providers are configured with
+                  environment variables on the API service, and the settings
+                  page it opened has no such control — so the button was a
+                  dead end that implied the customer had done something wrong.
+                  It had also gone stale, naming only MapBox after Google
+                  Places was added as an alternative. */}
               <p className="text-sm text-slate-600">
-                Business discovery needs a connected data provider. Without one, BizLeads will not
-                return results — it will never invent businesses to fill the gap.
+                Searching is unavailable right now — no credits were charged. This is a
+                configuration issue on our side, not something wrong with your search.
               </p>
               <p className="text-sm text-slate-600">
-                Add a MapBox access token to enable searching. No credits were charged.
+                Results will never be invented to fill the gap, which is why nothing is shown
+                rather than something plausible.
               </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-slate-200 cursor-pointer"
-                onClick={() => navigate('/app/settings/workspace')}
-              >
-                Go to Settings
-              </Button>
             </CardContent>
           </Card>
         )}

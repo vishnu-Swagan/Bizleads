@@ -1,7 +1,7 @@
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import Index from './pages/Index';
 import AuthCallback from './pages/AuthCallback';
@@ -23,6 +23,20 @@ import AppAutomations from './pages/app/Automations';
 import AppSettings from './pages/app/Settings';
 
 const queryClient = new QueryClient();
+
+/**
+ * Redirect /lead/:id to /app/leads/:id, carrying the id.
+ *
+ * `<Navigate to="/app/leads/:id">` does NOT interpolate route params — it
+ * treats the string literally, so every old lead link landed on a URL
+ * containing the characters ":id" and 404'd. The bug is invisible in the
+ * route table because the two lines look symmetrical with the redirects
+ * above, which have no params and are therefore correct.
+ */
+const RedirectToLead = () => {
+  const { id } = useParams();
+  return <Navigate to={`/app/leads/${id}`} replace />;
+};
 
 const AppRoutes = () => (
   <Routes>
@@ -60,7 +74,7 @@ const AppRoutes = () => (
     <Route path="/pipeline" element={<Navigate to="/app/pipeline" replace />} />
     <Route path="/analytics" element={<Navigate to="/app/analytics" replace />} />
     <Route path="/automation" element={<Navigate to="/app/automations" replace />} />
-    <Route path="/lead/:id" element={<Navigate to="/app/leads/:id" replace />} />
+    <Route path="/lead/:id" element={<RedirectToLead />} />
   </Routes>
 );
 

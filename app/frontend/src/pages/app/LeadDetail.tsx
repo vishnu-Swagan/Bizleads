@@ -626,7 +626,9 @@ export default function AppLeadDetail() {
 
                   <p className="text-xs text-slate-400">
                     {aiStatus?.available
-                      ? `Wording help is on${aiStatus.model ? ` (${aiStatus.model})` : ''}. It rewrites how the email reads and never adds a claim that isn't measured above.`
+                      // Model name omitted on purpose — see the same decision
+                      // on the Automations status strip.
+                      ? "Wording help is on. It rewrites how the email reads and never adds a claim that isn't measured above."
                       : 'Drafts are written from the measured findings above.'}
                   </p>
                 </CardContent>
