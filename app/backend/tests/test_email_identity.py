@@ -161,39 +161,51 @@ async def test_a_user_cannot_read_or_overwrite_another_users_config(
     assert {row.user_id for row in rows} == {USER_A_ID, USER_B_ID}
 
 
-# ---------- Fallback to the operator's environment account ----------
+# ---------- There is no fallback ----------
 
-async def test_a_user_with_no_config_falls_back_to_the_environment_identity(
-    db_session, monkeypatch
-):
+async def test_a_user_with_no_config_cannot_send_at_all(db_session, monkeypatch):
+    """The operator's account is never substituted for a customer's.
+
+    This previously asserted the opposite: no row fell back to the
+    environment identity. That meant every customer who had not opened
+    Settings sent outreach from the operator's address — spam complaints
+    against the operator's domain, replies into the operator's inbox, and a
+    customer named as legal sender of mail from an address they do not own.
+
+    A fully configured operator environment is set here precisely because the
+    old behaviour would have used it. Nothing may.
+    """
     monkeypatch.setenv("SMTP_HOST", "smtp.operator.test")
     monkeypatch.setenv("SMTP_USERNAME", "operator@operator.test")
     monkeypatch.setenv("SMTP_PASSWORD", "abcdefghijklmnop")
     monkeypatch.setenv("SMTP_FROM_EMAIL", "operator@operator.test")
 
-    identity = await resolve_identity(db_session, "some-user-with-no-row")
-
-    assert identity is not None
-    assert identity.provider == "smtp"
-    assert identity.from_email == "operator@operator.test"
-    assert identity.smtp_password == "abcdefghijklmnop"
+    assert await resolve_identity(db_session, "some-user-with-no-row") is None
 
 
-async def test_no_config_and_no_usable_environment_resolves_to_none(db_session):
-    # No env vars set at all (autouse fixture stripped them) - nothing usable
-    # anywhere, so resolution must fail closed rather than hand back a
-    # half-empty identity that would blow up later at send time.
+async def test_a_resend_environment_is_not_borrowed_either(db_session, monkeypatch):
+    """The same rule, via the other provider — RESEND_API_KEY is not a
+    shared sending account any more than SMTP_PASSWORD is."""
+    monkeypatch.setenv("RESEND_API_KEY", "re_operator_key")
+    monkeypatch.setenv("RESEND_FROM_EMAIL", "operator@operator.test")
+
+    assert await resolve_identity(db_session, "some-user-with-no-row") is None
+
+
+async def test_no_config_and_no_environment_resolves_to_none(db_session):
     identity = await resolve_identity(db_session, "some-user-with-no-row")
     assert identity is None
 
 
-async def test_an_incomplete_own_config_does_not_fall_back_to_the_environment(
+async def test_an_incomplete_own_config_resolves_to_none(
     db_session, monkeypatch
 ):
-    """A workspace that tried to configure its own account and got it wrong
-    must not silently start sending through the operator's account instead -
-    that would send email the workspace never authorized, from an address it
-    does not expect."""
+    """A half-configured account sends nothing rather than something.
+
+    Now that there is no fallback at all, this and the no-row case reach the
+    same answer by different routes — which is the point. Both are kept
+    because they guard different branches, and a future change that
+    reintroduced a fallback would break exactly one of them first."""
     monkeypatch.setenv("SMTP_HOST", "smtp.operator.test")
     monkeypatch.setenv("SMTP_USERNAME", "operator@operator.test")
     monkeypatch.setenv("SMTP_PASSWORD", "abcdefghijklmnop")

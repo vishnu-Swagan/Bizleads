@@ -1,17 +1,17 @@
 """Resolve which sending identity a workspace's outreach goes out under.
 
-The one decision that matters for the whole per-customer-email feature lives
-here: does this send use the workspace's OWN credentials, or does it fall
-back to the operator's shared environment-configured account?
+One rule, no exceptions: every account sends under its own credentials, or it
+does not send. There is no shared account and no fallback.
 
-The rule is narrow on purpose — fall back ONLY when the workspace has no
-Email_configs row at all. If a row exists but is incomplete, or its secret
-cannot be decrypted (a rotated CREDENTIAL_ENCRYPTION_KEY, a tampered row),
-this returns None rather than quietly sending through the operator's own
-account instead. Falling back there would defeat the entire point: outreach
-the customer never authorized would go out through the operator's mailbox,
-on the operator's reputation, which is exactly the shared-domain-blacklist
-problem this feature exists to prevent.
+An earlier version fell back to the operator's environment-configured account
+for users with no Email_configs row. See resolve_identity for why that was
+removed — briefly, it meant every customer who had not opened Settings sent
+outreach from the operator's address, which is the shared-domain-reputation
+problem this whole feature exists to prevent.
+
+The operator is not special. Their own account configures a sending identity
+through the same Settings screen every customer uses. SMTP_* and RESEND_* on
+the API service no longer participate in customer sends at all.
 """
 import logging
 from typing import Optional
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.email_configs import Email_configs
 from services import credential_crypto
-from services.email_sender import EmailIdentity, _environment_identity, is_email_configured
+from services.email_sender import EmailIdentity, is_email_configured
 
 logger = logging.getLogger(__name__)
 
@@ -54,27 +54,37 @@ def identity_from_config_row(config: Email_configs) -> EmailIdentity:
 
 
 async def resolve_identity(db: AsyncSession, user_id: str) -> Optional[EmailIdentity]:
-    """The identity to send this user's outreach as.
+    """The identity to send this user's outreach as, or None.
 
-    * A row exists and decrypts to something usable -> that, always. This is
-      the whole point: the customer's outreach leaves under the customer's
-      own credentials and reputation, not the operator's.
-    * No row exists at all -> the operator's own environment-configured
-      account, IF that is itself usable. This is the one deliberate
-      fallback, for workspaces that have not set up their own sending
-      account yet (including the operator's own default workspace).
-    * A row exists but is incomplete or undecryptable -> None. Never silently
-      substitute the operator's account for a workspace that tried to
-      configure its own and got it wrong; that would send email the
-      workspace did not authorize, from an address it does not expect.
-    * No row, and the environment fallback isn't usable either -> None.
+    There is no fallback. Every account sends under its own credentials or it
+    does not send.
+
+    This used to fall back to the operator's environment-configured account
+    when a user had no Email_configs row, which meant any customer who never
+    opened Settings sent outreach from the OPERATOR'S address. The
+    consequences all pointed one way: spam complaints accrued to the
+    operator's domain, replies landed in the operator's inbox where the
+    customer never saw them, and the Terms named the customer as the legal
+    sender of a message from an address they do not own and cannot
+    authenticate. The per-customer identity feature existed precisely to
+    prevent that, and the fallback quietly reinstated it for exactly the
+    users least likely to notice — the ones who had configured nothing.
+
+    Failing closed is the only safe direction here. An unconfigured account
+    that cannot send is an onboarding step; an unconfigured account that
+    sends as somebody else is a deliverability incident for the operator and
+    a compliance one for the customer.
+
+    * A row that decrypts to something usable -> that identity.
+    * A row that is incomplete or undecryptable (rotated
+      CREDENTIAL_ENCRYPTION_KEY, tampered row) -> None.
+    * No row at all -> None.
     """
     result = await db.execute(select(Email_configs).where(Email_configs.user_id == user_id))
     config = result.scalar_one_or_none()
 
     if config is None:
-        env_identity = _environment_identity()
-        return env_identity if is_email_configured(env_identity) else None
+        return None
 
     identity = identity_from_config_row(config)
     return identity if is_email_configured(identity) else None

@@ -423,9 +423,9 @@ export default function AppAutomations() {
     {
       key: 'sending',
       done: !!setupStatus?.sending_account_configured,
-      title: 'Connect the address your outreach sends from',
+      title: 'Connect your own Gmail or Resend account',
       detail:
-        'Every account sends from its own mailbox, so nothing can be sent until you add one. Stored encrypted.',
+        'Outreach sends from your address, under your credentials — there is no shared sender, so nothing can be sent until this is set. Stored encrypted, and only ever used for your account.',
       action: {
         label: 'Set up sending →',
         onClick: () => navigate('/app/settings/workspace'),
@@ -1203,13 +1203,18 @@ export default function AppAutomations() {
                     </button>
                   </span>
                 ) : (
+                  // States the requirement rather than only the absence.
+                  // There is no shared sending account to fall back to, so
+                  // "no sending address" means nothing can be sent at all —
+                  // and the reader should learn that here rather than from a
+                  // disabled Send button with no explanation.
                   <span className="text-sm text-slate-600">
-                    No sending address —{' '}
+                    Sending is off until you connect Gmail or Resend —{' '}
                     <button
                       onClick={() => navigate('/app/settings/workspace')}
                       className="text-indigo-600 hover:underline font-medium"
                     >
-                      set one up
+                      set up your account
                     </button>
                   </span>
                 )}

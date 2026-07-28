@@ -47,7 +47,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 |---|---|
 | `AUTOMATION_CRON_SECRET` | schedules never fire; automations run only when a human presses "Run now". See *Scheduled automations* below — it must match a GitHub secret of the same name |
 | `PAGESPEED_API_KEY` | website quality stays on the free heuristic tier instead of real Lighthouse audits. The key is free, no billing card |
-| `RESEND_API_KEY` / `SMTP_*` | the operator's own fallback sending account is unavailable. Customers with their own identity are unaffected |
+| `RESEND_API_KEY` / `SMTP_*` | **nothing.** These no longer take part in sending — every account, including yours, configures its own credentials in Settings. Safe to leave unset |
 | `ANTHROPIC_API_KEY` / `NVIDIA_API_KEY` | the AI polish buttons report "not configured". The deterministic composer still writes every draft |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | billing is off. See *Stripe* below — do not set one without the other |
 
@@ -143,9 +143,15 @@ Start with `sk_test_` keys and Stripe's test-mode webhook until a full subscribe
 
 ## Email sending
 
-Each customer sends from **their own** identity, stored encrypted under `CREDENTIAL_ENCRYPTION_KEY` and configured in-app. The `SMTP_*` / `RESEND_*` variables on Render are only the **operator's fallback**, used by a workspace that has not set up its own. That split is deliberate: one customer's spam complaint must not blacklist a shared domain, replies must reach the customer rather than you, and the Terms name the customer as the legal sender.
+**Every account sends under its own credentials, or it does not send.** There is no shared account and no fallback. Each customer configures Gmail (SMTP) or Resend in Settings; the secret is encrypted at rest under `CREDENTIAL_ENCRYPTION_KEY`.
 
-Whichever backend is configured is the one that runs — setting `RESEND_API_KEY` switches to Resend automatically, no flag required.
+You are not an exception — your own account configures a sending identity through the same screen. `SMTP_*` and `RESEND_*` on Render **no longer participate in customer sends at all**.
+
+That fallback used to exist and was removed: a customer who never opened Settings sent outreach from the operator's address, so spam complaints accrued to the operator's domain, replies landed in the operator's inbox where the customer never saw them, and the Terms named the customer as legal sender of mail from an address they neither own nor can authenticate. It failed silently, and it failed hardest for the users least likely to notice — the ones who had configured nothing.
+
+A customer with no sending account gets a clear refusal and an onboarding step. That is the intended behaviour, not a regression.
+
+Whichever backend a customer configures is the one that runs — choosing Resend switches delivery automatically, no flag required.
 
 **Resend needs a verified domain.** Until the sending domain is verified in the Resend dashboard, the only address it will deliver to is the one that owns the account — enough to test the pipeline, not enough to reach prospects. An unverified From address is rejected by name, so the error tells you which domain is at fault.
 

@@ -111,9 +111,12 @@ class BulkEmailRequest(BaseModel):
     body_text_template: Optional[str] = None
 
 
+# Names Settings, not a "Settings > Email" tab that does not exist — the
+# email card lives on the Workspace tab. Says "your own" because that is now
+# the only option: there is no shared account to fall back to.
 _EMAIL_NOT_CONFIGURED_DETAIL = (
-    "Email sending is not configured. Please set up your sending account in "
-    "Settings > Email."
+    "Set up your own sending account in Settings before sending. Outreach "
+    "goes out from your address, using your Gmail or Resend credentials."
 )
 
 

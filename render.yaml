@@ -59,18 +59,18 @@ services:
         sync: false
 
       # --- Outreach email (SMTP) ---
-      # Absent, /api/v1/outreach/send-email returns 503 and the Automations
-      # page reports email as not configured. Nothing else breaks.
+      # NOT USED FOR SENDING. Kept only so an existing deployment does not
+      # break on a removed key; leave every one of them unset.
       #
-      # Gmail: SMTP_PASSWORD must be a 16-character App Password from
-      # https://myaccount.google.com/apppasswords (2-Step Verification must be
-      # on first). A normal account password is always rejected. Google shows
-      # the App Password with spaces for readability; they are stripped
-      # automatically, so pasting it either way works.
+      # Every account configures its own Gmail or Resend credentials in
+      # Settings, encrypted at rest under CREDENTIAL_ENCRYPTION_KEY. That
+      # includes the operator's own account — there is no shared sender.
       #
-      # Gmail caps sending at ~500/day (2,000 on Workspace) and suspends
-      # accounts used for cold outreach. For real volume use a transactional
-      # provider on your own domain with SPF, DKIM and DMARC set up.
+      # These were once a fallback for workspaces that had configured nothing,
+      # which meant those customers sent from the operator's address: spam
+      # complaints against the operator's domain, replies into the operator's
+      # inbox, and the Terms naming the customer as legal sender of mail from
+      # an address they do not own. Removed in services/email_identity.py.
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
