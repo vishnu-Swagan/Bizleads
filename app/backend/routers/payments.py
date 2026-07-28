@@ -13,7 +13,7 @@ from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.credit_ledger import Credit_ledger
-from dependencies.tenancy import ensure_workspace_for_user
+from dependencies.tenancy import ensure_workspace_for_user, trial_expired
 
 import stripe
 
@@ -151,6 +151,12 @@ async def get_usage(
         "credits_remaining": max(0, credits_remaining),
         "max_seats": workspace.max_seats,
         "trial_ends_at": workspace.trial_ends_at,
+        # Computed server-side rather than left to the client to derive from
+        # trial_ends_at. The server is what enforces it in
+        # routers/discover.py, so anything else would be a second
+        # implementation of the same rule, free to disagree with the first —
+        # and the UI would confidently say "active" while every search 403s.
+        "trial_expired": trial_expired(workspace),
         "credits_reset_at": workspace.credits_reset_at,
     }
 

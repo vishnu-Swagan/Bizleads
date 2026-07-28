@@ -100,6 +100,9 @@ export default function AppDiscover() {
   const [savedIndices, setSavedIndices] = useState<Set<number>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
   const [jobStatus, setJobStatus] = useState<string>('');
+  // The server's own wording for an expired trial, kept verbatim so the date
+  // shown is the date the block was computed from.
+  const [trialMessage, setTrialMessage] = useState<string>('');
   const [dataSource, setDataSource] = useState<string>('');
 
   useEffect(() => {
@@ -183,7 +186,14 @@ export default function AppDiscover() {
       }
     } catch (err: any) {
       const detail = err?.data?.detail;
-      if (detail?.error === 'insufficient_credits') {
+      if (detail?.error === 'trial_expired') {
+        // Distinct from running out of credits: a top-up does not fix this,
+        // only a plan does. Carrying the server's own message keeps the date
+        // it names identical to the one the block was computed from.
+        setJobStatus('trial_expired');
+        setTrialMessage(detail.message ?? '');
+        toast.error(detail.message ?? 'Your free trial has ended.');
+      } else if (detail?.error === 'insufficient_credits') {
         setJobStatus('quota_exceeded');
         toast.error(detail.message);
       } else if (detail?.error === 'discovery_failed') {
@@ -435,6 +445,31 @@ export default function AppDiscover() {
         )}
 
         {/* Quota exceeded */}
+        {jobStatus === 'trial_expired' && (
+          <Card className="border-amber-200 bg-amber-50">
+            <CardContent className="p-5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-amber-600 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-amber-900">Free trial ended</p>
+                  <p className="text-xs text-amber-700">
+                    {trialMessage ||
+                      'Upgrade to keep discovering and qualifying leads. Your saved leads stay available.'}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber-300 shrink-0"
+                onClick={() => navigate('/app/settings/billing')}
+              >
+                Upgrade
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {jobStatus === 'quota_exceeded' && (
           <Card className="border-amber-200 bg-amber-50">
             <CardContent className="p-5 flex items-center justify-between">
@@ -457,6 +492,7 @@ export default function AppDiscover() {
           hasSearched &&
           results.length === 0 &&
           jobStatus !== 'quota_exceeded' &&
+          jobStatus !== 'trial_expired' &&
           jobStatus !== 'provider_unconfigured' &&
           jobStatus !== 'no_matches' && (
             <div className="flex flex-col items-center py-12 text-center">

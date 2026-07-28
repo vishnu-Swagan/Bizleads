@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import AppShell from '@/components/AppShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -324,6 +325,7 @@ function QueueStatusBadge({ status, sendError }: { status: string; sendError?: s
 
 export default function AppAutomations() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<EmailStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [catchingUp, setCatchingUp] = useState(false);
@@ -1037,180 +1039,56 @@ export default function AppAutomations() {
           </p>
         </div>
 
-        <Card className="border-slate-200">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Mail className="h-4 w-4 text-slate-500" />
-              Email delivery
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <Skeleton className="h-16 w-full" />
-            ) : status?.configured ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge className="bg-green-50 text-green-700 border-green-200 gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Connected
-                </Badge>
-                <span className="text-sm text-slate-600">
-                  Sending as <strong className="text-slate-900">{status.from_email}</strong> via{' '}
-                  {status.provider === 'resend' ? 'Resend' : `${status.host}:${status.port}`}
-                </span>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <Badge
-                  variant="outline"
-                  className="border-amber-200 bg-amber-50 text-amber-800 gap-1.5"
-                >
-                  <XCircle className="h-3.5 w-3.5" />
-                  Not configured
-                </Badge>
+        {/* One status strip, replacing two full cards.
 
-                {status?.missing?.length ? (
-                  <p className="text-sm text-slate-600">
-                    Set{' '}
-                    {status.missing.map((m, i) => (
-                      <span key={m}>
-                        {i > 0 && ', '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-800">
-                          {m}
-                        </code>
-                      </span>
-                    ))}{' '}
-                    in your Render dashboard, then redeploy.
-                  </p>
+            Those cards carried ~140 lines, most of it operator setup: env var
+            names (SMTP_PASSWORD, RESEND_API_KEY, ANTHROPIC_API_KEY), Resend
+            domain-verification steps and a Gmail App Password walkthrough —
+            none of which a customer can act on, and all of which described the
+            OPERATOR's fallback account rather than the customer's own. A
+            customer configures their sending address in Settings, which is
+            where this now points.
+
+            What remains is only what is true right now and only what the
+            reader can do something about. */}
+        <Card className="border-slate-200">
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4 text-slate-400 shrink-0" />
+                {loading ? (
+                  <Skeleton className="h-4 w-40" />
+                ) : status?.configured ? (
+                  <span className="text-sm text-slate-600">
+                    Sending as{' '}
+                    <strong className="text-slate-900">{status.from_email}</strong>
+                  </span>
                 ) : (
-                  <p className="text-sm text-slate-600">
-                    Email delivery is unavailable. Check the API configuration.
-                  </p>
+                  <span className="text-sm text-slate-600">
+                    No sending address —{' '}
+                    <button
+                      onClick={() => navigate('/app/settings/workspace')}
+                      className="text-indigo-600 hover:underline font-medium"
+                    >
+                      set one up
+                    </button>
+                  </span>
                 )}
-
-                {/* The single most common setup failure, answered inline. */}
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                  {status?.provider === 'resend' ? (
-                    <>
-                      <p className="font-medium text-slate-900">Using Resend</p>
-                      <ol className="mt-2 list-decimal space-y-1.5 pl-5">
-                        <li>
-                          Create an API key at{' '}
-                          <a
-                            href="https://resend.com/api-keys"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-indigo-600 underline underline-offset-2"
-                          >
-                            resend.com/api-keys
-                          </a>{' '}
-                          and set it as <code className="text-xs">RESEND_API_KEY</code>.
-                        </li>
-                        <li>
-                          Verify your sending domain at{' '}
-                          <a
-                            href="https://resend.com/domains"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-indigo-600 underline underline-offset-2"
-                          >
-                            resend.com/domains
-                          </a>
-                          . Until it is verified, Resend will only deliver to the address
-                          that owns the account.
-                        </li>
-                        <li>
-                          Set <code className="text-xs">RESEND_FROM_EMAIL</code> to an address
-                          on that domain.
-                        </li>
-                      </ol>
-                      <p className="mt-3 text-slate-600">
-                        Check Resend&rsquo;s acceptable use policy before sending cold outreach.
-                        Transactional providers generally prohibit unsolicited email.
-                      </p>
-                    </>
-                  ) : (
-                  <>
-                  <p className="font-medium text-slate-900">Using Gmail?</p>
-                  <ol className="mt-2 list-decimal space-y-1.5 pl-5">
-                    <li>Turn on 2-Step Verification for the account.</li>
-                    <li>
-                      Create an App Password at{' '}
-                      <a
-                        href="https://myaccount.google.com/apppasswords"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-indigo-600 underline underline-offset-2 inline-flex items-center gap-1"
-                      >
-                        myaccount.google.com/apppasswords
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </li>
-                    <li>
-                      Use those 16 characters as <code className="text-xs">SMTP_PASSWORD</code>.
-                      Your normal account password is always rejected.
-                    </li>
-                  </ol>
-                  <p className="mt-3 text-slate-600">
-                    Gmail caps sending at roughly 500 a day and suspends accounts used for cold
-                    outreach. Setting <code className="text-xs">RESEND_API_KEY</code> switches
-                    delivery to Resend automatically.
-                  </p>
-                  </>
-                  )}
-                </div>
-
-                <Button variant="outline" size="sm" onClick={loadStatus} className="cursor-pointer">
-                  Re-check
-                </Button>
               </div>
-            )}
-          </CardContent>
-        </Card>
 
-        {/* AI writing assistant status — visible everywhere the rest of the page uses it. */}
-        <Card className="border-slate-200">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Bot className="h-4 w-4 text-slate-500" />
-              AI writing assistant
-            </CardTitle>
-            <CardDescription>
-              AI only ever rewrites wording. Every fact in an email — the score, the missing
-              feature, whatever it cites — comes from what Qualify actually measured on the
-              prospect&rsquo;s site. It never researches or invents anything on its own.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {aiStatusLoading ? (
-              <Skeleton className="h-8 w-48" />
-            ) : aiAvailable ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge className="bg-green-50 text-green-700 border-green-200 gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Available
-                </Badge>
-                <span className="text-sm text-slate-600">
-                  Model <strong className="text-slate-900">{aiStatus?.model ?? 'unknown'}</strong>
-                </span>
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4 text-slate-400 shrink-0" />
+                {aiStatusLoading ? (
+                  <Skeleton className="h-4 w-32" />
+                ) : (
+                  <span className="text-sm text-slate-600">
+                    {aiAvailable
+                      ? <>Wording help on <span className="text-slate-900">{aiStatus?.model}</span></>
+                      : 'Wording help unavailable'}
+                  </span>
+                )}
               </div>
-            ) : (
-              /* Says what is degraded, not what an operator should go and
-                 configure. This previously read "Set ANTHROPIC_API_KEY in your
-                 Render dashboard" — infrastructure a customer cannot reach,
-                 and by then inaccurate too, since an NVIDIA key enables the
-                 same feature. */
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800 gap-1.5">
-                  <XCircle className="h-3.5 w-3.5" />
-                  Unavailable
-                </Badge>
-                <span className="text-sm text-slate-600">
-                  Wording help is off right now. Drafting from measured findings and sending
-                  both work without it — every draft is written from what Qualify measured
-                  either way.
-                </span>
-              </div>
-            )}
+            </div>
           </CardContent>
         </Card>
 
@@ -1223,10 +1101,14 @@ export default function AppAutomations() {
                   <CalendarClock className="h-4 w-4 text-slate-500" />
                   Automations
                 </CardTitle>
+                {/* "Nothing is ever sent automatically" was asserted here, on
+                    the approval queue and on the draft composer — three times
+                    on one page. Repetition reads as anxiety rather than
+                    reassurance, and it crowds out the facts. Stated once, on
+                    the queue that actually holds the drafts. */}
                 <CardDescription className="mt-1">
-                  Repeats a Discover search on a schedule, and can optionally qualify and draft
-                  outreach for what it finds. Nothing is ever sent automatically — drafts wait
-                  in the approval queue below.
+                  Repeats a Discover search on a schedule, then qualifies and drafts outreach
+                  for what it finds.
                 </CardDescription>
                 {/*
                   Say plainly when scheduled work actually happens. A "Daily"
@@ -1552,9 +1434,7 @@ export default function AppAutomations() {
                   Approval queue
                 </CardTitle>
                 <CardDescription className="mt-1">
-                  Drafts your automations wrote. Nothing here sends itself — review, edit if needed, then
-                  send or discard. AI can help with wording below; the facts stay exactly what was
-                  measured.
+                  Nothing sends until you approve it here. Review, edit, then send or discard.
                 </CardDescription>
               </div>
               {queue.length > 0 && (
@@ -1691,9 +1571,8 @@ export default function AppAutomations() {
               Draft from findings
             </CardTitle>
             <CardDescription>
-              Every sentence is written from what we measured on the prospect&rsquo;s site.
-              Nothing is invented — a lead with nothing measurable gets no email. AI, where
-              available, can only reword what is already here.
+              Written from each lead&rsquo;s measured findings. A lead with nothing measured
+              gets no email.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1898,8 +1777,8 @@ export default function AppAutomations() {
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Send a one-off email</CardTitle>
             <CardDescription>
-              Written by hand. AI can clean up the wording below — quote the real numbers from
-              Qualify yourself; it will not verify anything on its own.
+              Written by hand. Nothing here is checked against a measurement — quote the
+              numbers from Qualify yourself.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

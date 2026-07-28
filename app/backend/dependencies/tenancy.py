@@ -6,8 +6,8 @@ to prevent, so keep the declaration at module scope where it is visible.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Dict, FrozenSet, Literal, Type
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, FrozenSet, Literal, Optional, Type
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
@@ -65,6 +65,54 @@ def filter_writes(payload: Dict[str, Any], policy: EntityPolicy, *, strict: bool
         )
 
     return cleaned
+
+
+def trial_ended_at(workspace: Workspaces) -> Optional[datetime]:
+    """When this workspace's trial expired, or None if it has not.
+
+    None covers four distinct situations that all mean "do not treat this as
+    an expired trial": the workspace is on a paid plan, its subscription is no
+    longer `trialing`, no end date was ever recorded, or the recorded date is
+    unparseable.
+
+    The last two fail OPEN deliberately. This function gates the features the
+    product exists to provide, so a blank or corrupt timestamp must degrade to
+    "keep working" rather than locking a paying-or-soon-to-pay customer out of
+    an account over a bad string. A trial that never ends is a revenue
+    problem; a trial that ends wrongly is a support incident and a refund.
+    """
+    if (workspace.plan or "") != "trial":
+        return None
+    # An empty status is what pre-existing rows carry, and those are trials.
+    if (workspace.subscription_status or "trialing") != "trialing":
+        return None
+
+    raw = (workspace.trial_ends_at or "").strip()
+    if not raw:
+        return None
+
+    try:
+        ends = datetime.fromisoformat(raw)
+    except ValueError:
+        logger.warning(
+            "Workspace %s has an unparseable trial_ends_at (%r); treating the "
+            "trial as open rather than locking the account out",
+            workspace.id, raw,
+        )
+        return None
+
+    # Rows written before the tz-aware default carry naive timestamps. They
+    # were always UTC, so read them as such rather than letting the comparison
+    # raise.
+    if ends.tzinfo is None:
+        ends = ends.replace(tzinfo=timezone.utc)
+
+    return ends if datetime.now(timezone.utc) >= ends else None
+
+
+def trial_expired(workspace: Workspaces) -> bool:
+    """Whether this workspace's trial has run out. See trial_ended_at."""
+    return trial_ended_at(workspace) is not None
 
 
 async def ensure_workspace_for_user(user: UserResponse, db: AsyncSession) -> Workspaces:

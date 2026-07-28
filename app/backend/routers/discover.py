@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from dependencies.auth import get_current_user
-from dependencies.tenancy import ensure_workspace_for_user
+from dependencies.tenancy import ensure_workspace_for_user, trial_ended_at
 from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.search_jobs import Search_jobs
@@ -122,6 +122,13 @@ async def run_discovery(
     fallback: fabricated businesses must never be returned as live results.
     """
     workspace = await ensure_workspace_for_user(current_user, db)
+
+    # Entitlement before capability. An expired trial is refused whether or
+    # not a provider happens to be connected: "no provider is connected" is
+    # operator information, and showing it to somebody whose trial has run out
+    # answers a question they did not ask while hiding the one thing they need
+    # to do. Both checks still precede any job row or credit deduction.
+    _refuse_if_trial_expired(workspace)
 
     if not is_discovery_configured():
         return {
@@ -361,6 +368,38 @@ ANGLE_BUDGET_SECONDS = 90.0
 CREDITS_PER_QUALIFICATION = 1
 
 
+def _refuse_if_trial_expired(workspace) -> None:
+    """Block the credit-spending passes once a trial has run out.
+
+    Applied to Discover and Qualify only — the two operations that spend
+    credits and call third-party providers. Reading, editing and exporting
+    existing leads stay available: that is the customer's own data, and
+    holding it hostage would be a worse product than an honest paywall on new
+    work. Outreach drafting is likewise untouched, since it costs no credits
+    and only re-reads measurements already paid for.
+
+    Until this existed, trial_ends_at was written at signup and read by
+    nothing, so every trial was effectively unlimited — which competes
+    directly with the paid plans.
+    """
+    ended = trial_ended_at(workspace)
+    if ended is None:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "trial_expired",
+            "message": (
+                f"Your free trial ended on {ended.date().isoformat()}. "
+                "Upgrade to keep discovering and qualifying leads — the leads "
+                "you have already saved stay available."
+            ),
+            "trial_ended_at": ended.isoformat(),
+            "upgrade_url": "/app/settings/billing",
+        },
+    )
+
+
 class QualifyRequest(BaseModel):
     lead_ids: list[int]
 
@@ -390,6 +429,8 @@ async def qualify_leads(
     workspace = await ensure_workspace_for_user(current_user, db)
     credits_remaining = workspace.monthly_credits - workspace.credits_used
     cost = CREDITS_PER_QUALIFICATION * len(data.lead_ids)
+
+    _refuse_if_trial_expired(workspace)
 
     if credits_remaining < cost:
         raise HTTPException(

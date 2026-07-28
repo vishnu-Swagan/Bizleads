@@ -30,6 +30,9 @@ interface UsageData {
   credits_remaining: number;
   max_seats: number;
   trial_ends_at: string;
+  /** Computed server-side by the same function that enforces the block, so
+   *  the UI and the API can never disagree about whether a trial has run out. */
+  trial_expired: boolean;
   credits_reset_at: string;
 }
 
@@ -301,39 +304,16 @@ export default function AppSettings() {
           </TabsList>
 
           <TabsContent value="workspace" className="space-y-4 mt-4">
-            {/* Offer Profile */}
-            <Card className="border-slate-200">
-              <CardHeader>
-                <CardTitle className="text-sm font-medium text-slate-600">Offer Profile</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-slate-500">
-                  Configure your services and target market to improve Agency Fit scoring for discovered leads.
-                </p>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-slate-600">Services Offered</Label>
-                    <Input placeholder="Web design, SEO, Branding..." className="border-slate-200" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-slate-600">Platforms</Label>
-                    <Input placeholder="WordPress, Webflow, Shopify..." className="border-slate-200" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-slate-600">Price Range (USD)</Label>
-                    <div className="flex gap-2">
-                      <Input placeholder="Min" type="number" className="border-slate-200" />
-                      <Input placeholder="Max" type="number" className="border-slate-200" />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-slate-600">Target Categories</Label>
-                    <Input placeholder="Restaurants, Salons, Clinics..." className="border-slate-200" />
-                  </div>
-                </div>
-                <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700">Save Profile</Button>
-              </CardContent>
-            </Card>
+            {/* An "Offer Profile" card stood here: inputs for services,
+                platforms, price range and target categories, above a Save
+                Profile button. None of it was wired — the inputs had no value
+                or onChange and the button had no onClick, so everything typed
+                was silently discarded on navigation. Even a working form would
+                have changed nothing: the Agency Fit score it claimed to
+                improve is the constant 50 hardcoded in
+                services/scoring.py::build_score_breakdown, read from no
+                profile at all. A form that pretends to save is worse than no
+                form. Rebuild it when agency_fit actually reads one. */}
 
             {/* Email delivery — the first thing every new customer must complete before
                 outreach can send, because each customer sends from their own mailbox. */}
@@ -711,11 +691,30 @@ export default function AppSettings() {
                         </div>
                       </div>
                     </div>
-                    {usage.subscription_status === 'trialing' && usage.trial_ends_at && (
+                    {/* Two states, not one. This previously rendered "Trial
+                        ends: <date>" whatever the date was, so an expired
+                        trial displayed a reassuring line about a day that had
+                        already passed. `trial_expired` is computed by the same
+                        server-side function that enforces the block, so this
+                        cannot disagree with what Discover actually does. */}
+                    {usage.trial_expired ? (
+                      <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
+                        <p className="text-xs font-medium text-amber-900">
+                          Trial ended
+                          {usage.trial_ends_at
+                            ? ` on ${new Date(usage.trial_ends_at).toLocaleDateString()}`
+                            : ''}
+                        </p>
+                        <p className="text-xs text-amber-800 mt-0.5">
+                          Discover and Qualify are paused. Your saved leads, drafts and
+                          settings are untouched — upgrade below to start measuring again.
+                        </p>
+                      </div>
+                    ) : usage.subscription_status === 'trialing' && usage.trial_ends_at ? (
                       <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
-                        Trial ends: {new Date(usage.trial_ends_at).toLocaleDateString()}
+                        Trial ends {new Date(usage.trial_ends_at).toLocaleDateString()}
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 ) : null}
               </CardContent>
