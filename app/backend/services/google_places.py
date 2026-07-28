@@ -205,6 +205,14 @@ def _normalize_place(place: dict, country: str) -> Optional[dict]:
             "has_website": has_website,
             "contact_email": "",  # Not available from Places API
             "contact_phone": phone,
+            # The full street address, under the same key MapBox uses, so the
+            # save path stores an address whichever provider served the
+            # result. Without this the field is silently provider-dependent:
+            # formattedAddress was already being fetched and read into
+            # `address` above, but only ever reached the UI as the truncated
+            # `location`, so a Google-sourced lead saved with no address at
+            # all while a MapBox one saved fine.
+            "full_address": address,
             "google_place_id": place.get("id", ""),
             "google_maps_url": place.get("googleMapsUri", ""),
             "google_rating": rating,
