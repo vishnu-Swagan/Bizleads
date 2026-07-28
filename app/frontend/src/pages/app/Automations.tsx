@@ -1846,9 +1846,14 @@ export default function AppAutomations() {
                 <Label htmlFor="sender-name" className="text-xs font-medium text-slate-600">
                   Your name
                 </Label>
+                {/* Generic, not the operator's own name. These placeholders
+                    read as ghost text in every customer's account, so a real
+                    person's name and company were being shown to everyone —
+                    and a customer who typed nothing would have signed the
+                    email as somebody else entirely. */}
                 <Input
                   id="sender-name"
-                  placeholder="Vishnu"
+                  placeholder="Your first name"
                   value={senderName}
                   onChange={(e) => setSenderName(e.target.value)}
                   className="border-slate-200"
@@ -1860,7 +1865,7 @@ export default function AppAutomations() {
                 </Label>
                 <Input
                   id="sender-business"
-                  placeholder="Torque Trends"
+                  placeholder="Your company name"
                   value={senderBusiness}
                   onChange={(e) => setSenderBusiness(e.target.value)}
                   className="border-slate-200"
