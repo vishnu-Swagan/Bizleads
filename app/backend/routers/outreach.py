@@ -46,9 +46,13 @@ async def run_pagespeed_audit(
 ):
     """Run a PageSpeed Insights audit on a single website."""
     if not is_pagespeed_configured():
+        # Deliberately does not name the environment variable or tell the
+        # customer to go and set it. PAGESPEED_API_KEY lives on the API
+        # service, so that instruction described work only the operator can
+        # do, in a place the customer cannot reach.
         raise HTTPException(
             status_code=503,
-            detail="PageSpeed Insights is not configured. Please add your PAGESPEED_API_KEY in Settings > Integrations."
+            detail="Detailed audits are unavailable right now. Website quality is still measured from the page itself.",
         )
 
     result = await audit_website(data.url, data.strategy)
@@ -65,9 +69,10 @@ async def run_bulk_audit(
 ):
     """Run PageSpeed audits on multiple websites (max 10)."""
     if not is_pagespeed_configured():
+        # Same wording as /audit above, for the same reason.
         raise HTTPException(
             status_code=503,
-            detail="PageSpeed Insights is not configured. Please add your PAGESPEED_API_KEY in Settings > Integrations."
+            detail="Detailed audits are unavailable right now. Website quality is still measured from the page itself.",
         )
 
     if not data.urls:

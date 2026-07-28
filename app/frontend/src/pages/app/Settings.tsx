@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
 import {
-  CreditCard, Settings as SettingsIcon, Users, Plug, CheckCircle2, ArrowRight, Loader2,
+  CreditCard, Settings as SettingsIcon, Users, CheckCircle2, ArrowRight, Loader2,
   Mail, XCircle, AlertTriangle, ExternalLink, Send, ShieldAlert, Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -74,7 +74,6 @@ export default function AppSettings() {
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [providerStatus, setProviderStatus] = useState<{ mapbox_connected: boolean; pagespeed_connected: boolean } | null>(null);
 
   // Email delivery — see EmailSettingsData above for why secrets are booleans.
   const [emailData, setEmailData] = useState<EmailSettingsData | null>(null);
@@ -94,18 +93,6 @@ export default function AppSettings() {
   const [resendApiKey, setResendApiKey] = useState('');
 
   const activeTab = location.pathname.includes('billing') ? 'billing' : 'workspace';
-
-  useEffect(() => {
-    // Ask the API which providers are actually configured rather than
-    // asserting it in the markup.
-    client.apiCall
-      .invoke({ url: '/api/v1/discover/filters', method: 'GET', data: {} })
-      .then((res) => setProviderStatus({
-        mapbox_connected: !!res.data?.mapbox_connected,
-        pagespeed_connected: !!res.data?.pagespeed_connected,
-      }))
-      .catch(() => setProviderStatus({ mapbox_connected: false, pagespeed_connected: false }));
-  }, []);
 
   useEffect(() => {
     if (user) fetchUsage();
@@ -304,7 +291,7 @@ export default function AppSettings() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
-          <p className="text-sm text-slate-500">Manage your workspace, billing, and integrations</p>
+          <p className="text-sm text-slate-500">Manage your workspace, sending account, and billing</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={(v) => navigate(`/app/settings/${v}`)}>
@@ -673,63 +660,18 @@ export default function AppSettings() {
               </CardContent>
             </Card>
 
-            {/* Integrations */}
-            <Card className="border-slate-200">
-              <CardHeader>
-                <CardTitle className="text-sm font-medium text-slate-600">Integrations</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {/* Status comes from the API, never a hardcoded value. This
-                      block previously rendered 'Not Connected' unconditionally,
-                      so a correctly configured provider still read as missing. */}
-                  {[
-                    {
-                      name: 'MapBox Places API',
-                      desc: 'Live business discovery',
-                      connected: providerStatus?.mapbox_connected ?? null,
-                      note: 'Set MAPBOX_ACCESS_TOKEN on the API service',
-                    },
-                    {
-                      name: 'PageSpeed Insights',
-                      desc: 'Website performance audits — optional',
-                      connected: providerStatus?.pagespeed_connected ?? null,
-                      note: 'Optional. Without it, site quality is scored from the page we already fetch.',
-                    },
-                  ].map((intg) => (
-                    <div key={intg.name} className="flex items-center justify-between p-3 rounded-lg border border-slate-200">
-                      <div className="flex items-center gap-3">
-                        <Plug className={cn('h-4 w-4', intg.connected ? 'text-green-600' : 'text-slate-400')} />
-                        <div>
-                          <p className="text-sm font-medium text-slate-700">{intg.name}</p>
-                          <p className="text-xs text-slate-500">
-                            {intg.connected ? intg.desc : `${intg.desc} · ${intg.note}`}
-                          </p>
-                        </div>
-                      </div>
-                      {intg.connected === null ? (
-                        <Badge variant="outline" className="text-xs border-slate-200 text-slate-400">
-                          Checking…
-                        </Badge>
-                      ) : intg.connected ? (
-                        <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
-                          Connected
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">
-                          Not Connected
-                        </Badge>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-500 mt-4">
-                  {providerStatus?.mapbox_connected
-                    ? 'Discovery is live. Searches return real businesses from the connected provider.'
-                    : 'Discovery requires a connected provider. Without one, Discover returns no results rather than inventing businesses.'}
-                </p>
-              </CardContent>
-            </Card>
+            {/* An Integrations card used to sit here, listing MapBox and
+                PageSpeed with their connection status. It was removed because
+                it was operator information shown to customers: discovery
+                providers are configured with environment variables on the API
+                service, so its own remediation note read "Set
+                MAPBOX_ACCESS_TOKEN on the API service" — an instruction no
+                customer can act on, describing infrastructure they should not
+                be told about. Provider status is still available to the
+                operator from GET /api/v1/discover/filters, and Discover
+                already reports its own setup state honestly when no provider
+                is connected, which is where a customer would actually notice.
+                Do not reintroduce this as a customer-facing panel. */}
           </TabsContent>
 
           <TabsContent value="billing" className="space-y-4 mt-4">

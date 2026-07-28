@@ -32,6 +32,43 @@ interface Lead {
   notes_count: number;
   last_contacted: string;
   data_source?: string | null;
+  /** JSON-encoded Finding[] from services/site_signals.py, or null when this
+   *  lead has never been qualified. Null and "[]" mean different things and
+   *  must stay distinguishable — see parseFindings below. */
+  findings?: string | null;
+  qualified_at?: string | null;
+}
+
+/** One measured defect. `evidence` is the checkable detail behind `label`. */
+interface Finding {
+  id: string;
+  label: string;
+  penalty: number;
+  evidence: string;
+  category: string;
+}
+
+/**
+ * Decode a lead's stored findings.
+ *
+ * Returns null for "never measured" and [] for "measured, nothing wrong" —
+ * the backend is careful to keep those apart (routers/discover.py only writes
+ * findings once a website_score was actually established, so that "[]" never
+ * claims a lead was checked when it wasn't), and collapsing them here would
+ * throw that distinction away at the last step.
+ *
+ * Malformed JSON counts as not measured rather than as a clean bill of
+ * health. Guessing in this direction is the safe one: it prompts a re-run
+ * instead of telling somebody a broken site passed every check.
+ */
+function parseFindings(raw: string | null | undefined): Finding[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Finding[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 interface Note {
@@ -134,6 +171,12 @@ export default function AppLeadDetail() {
       </AppShell>
     );
   }
+
+  // Computed after the !lead guard so both are plain values by render time.
+  const findings = parseFindings(lead.findings);
+  const qualifiedOn = lead.qualified_at
+    ? new Date(lead.qualified_at).toLocaleDateString()
+    : null;
 
   return (
     <AppShell>
@@ -251,10 +294,62 @@ export default function AppLeadDetail() {
           <TabsContent value="evidence" className="space-y-4">
             <Card className="border-slate-200">
               <CardContent className="p-5">
-                <p className="text-sm text-slate-500">
-                  Evidence collection requires provider integrations. Configure providers in Settings → Integrations 
-                  to enable website audits, screenshots, and detailed analysis.
-                </p>
+                {findings === null ? (
+                  <>
+                    <p className="text-sm text-slate-700 font-medium">Not measured yet</p>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Run <span className="font-medium">Qualify</span> on this lead from the Leads page to
+                      measure its site. That costs one credit and produces the specific, checkable problems
+                      you can quote back to the business.
+                    </p>
+                  </>
+                ) : findings.length === 0 ? (
+                  <>
+                    <p className="text-sm text-slate-700 font-medium">Measured — nothing wrong found</p>
+                    <p className="text-sm text-slate-500 mt-1">
+                      This site passed every check{qualifiedOn ? ` when it was measured on ${qualifiedOn}` : ''}.
+                      There is no defect to pitch, which is a finding in itself.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-baseline justify-between gap-3 mb-4">
+                      <p className="text-sm font-medium text-slate-700">
+                        {findings.length} issue{findings.length === 1 ? '' : 's'} measured on this site
+                      </p>
+                      {qualifiedOn && (
+                        <span className="text-xs text-slate-500 shrink-0">Measured {qualifiedOn}</span>
+                      )}
+                    </div>
+                    <ul className="space-y-3">
+                      {findings.map((finding, i) => (
+                        <li
+                          key={finding.id || i}
+                          className="rounded-lg border border-slate-200 p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="text-sm font-medium text-slate-800">{finding.label}</p>
+                            {finding.category && (
+                              <Badge variant="outline" className="text-xs shrink-0 capitalize">
+                                {finding.category}
+                              </Badge>
+                            )}
+                          </div>
+                          {/* The evidence string is the whole point: it is what
+                              makes the claim checkable by the prospect, so it is
+                              shown verbatim rather than summarised. */}
+                          {finding.evidence && (
+                            <p className="text-xs text-slate-500 mt-1.5">{finding.evidence}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-slate-400 mt-4">
+                      Every line above was measured from the live site. Outreach drafted for this lead
+                      cites only these findings.
+                    </p>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

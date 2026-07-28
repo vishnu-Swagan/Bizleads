@@ -78,11 +78,11 @@ const tutorialSteps: TutorialStep[] = [
   {
     id: 'settings',
     title: 'Settings & Billing',
-    description: 'Configure your Offer Profile for better Fit scoring, manage integrations, and handle your subscription.',
+    description: 'Configure your Offer Profile for better Fit scoring, set up the account your outreach sends from, and handle your subscription.',
     icon: Settings,
     targetPath: '/app/settings/workspace',
     tip: 'Set up your services and target categories to improve Agency Fit scoring for discovered leads.',
-    highlight: 'Offer Profile, integrations, and plan management',
+    highlight: 'Offer Profile, sending account, and plan management',
   },
 ];
 
