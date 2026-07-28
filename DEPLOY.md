@@ -74,6 +74,7 @@ Environment variables:
 | `VITE_SUPABASE_URL` | your Supabase URL |
 | `VITE_SUPABASE_ANON_KEY` | the anon key (public by design) |
 | `VITE_API_BASE_URL` | your Render URL from step 1 |
+| `VITE_REVENUECAT_PUBLIC_API_KEY` | RevenueCat public Web Billing SDK key; live key in Production, matching sandbox key in Preview |
 
 ---
 
@@ -202,7 +203,15 @@ existing signed Stripe webhook.
    package with `package_id`. If this variable is absent, upgrade buttons use
    the existing direct Stripe Checkout fallback.
 
-7. Test in sandbox first:
+7. Copy the RevenueCat **public Web Billing SDK key** to
+   `VITE_REVENUECAT_PUBLIC_API_KEY` in Vercel. Scope the live Stripe Web
+   Billing key to Production and the matching sandbox key to Preview. These
+   public SDK keys are safe in the browser; a RevenueCat secret API key is not.
+   The app initializes RevenueCat with the signed-in Supabase UUID and presents
+   the paywall attached to the current offering. The hosted purchase link
+   remains the fallback if the SDK or paywall cannot load.
+
+8. Test in sandbox first:
 
    - Solo monthly activates 300 credits;
    - Pro monthly activates 1,500 credits;
