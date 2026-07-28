@@ -10,14 +10,18 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
 PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places"
 
 
+def _api_key() -> Optional[str]:
+    """Read the key at call time so startup env loading and tests work."""
+    return os.environ.get("GOOGLE_PLACES_API_KEY")
+
+
 def is_google_places_configured() -> bool:
     """Check if Google Places API key is available."""
-    return bool(GOOGLE_PLACES_API_KEY)
+    return bool(_api_key())
 
 
 async def search_places(
@@ -31,7 +35,8 @@ async def search_places(
     Search for businesses using Google Places API (New).
     Returns a list of business dicts with normalized fields.
     """
-    if not GOOGLE_PLACES_API_KEY:
+    api_key = _api_key()
+    if not api_key:
         logger.warning("Google Places API key not configured, returning empty results")
         return []
 
@@ -50,7 +55,7 @@ async def search_places(
 
     headers = {
         "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": (
             "places.id,places.displayName,places.formattedAddress,"
             "places.types,places.websiteUri,places.nationalPhoneNumber,"
@@ -111,12 +116,13 @@ async def search_places(
 
 async def get_place_details(place_id: str) -> Optional[dict]:
     """Get detailed information about a specific place."""
-    if not GOOGLE_PLACES_API_KEY:
+    api_key = _api_key()
+    if not api_key:
         return None
 
     headers = {
         "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+        "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": (
             "id,displayName,formattedAddress,websiteUri,"
             "nationalPhoneNumber,internationalPhoneNumber,"

@@ -18,7 +18,16 @@ from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.search_jobs import Search_jobs
 from services.scoring import build_score_breakdown
-from services.mapbox_places import MAX_LIMIT, is_mapbox_configured, search_places
+from services.discovery_provider import (
+    MAX_LIMIT,
+    active_provider_slug,
+    configured_provider_names,
+    is_discovery_configured,
+    is_google_places_configured,
+    is_mapbox_configured,
+    provider_for_results,
+    search_places,
+)
 from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
 from services.leads import LeadsService
@@ -81,7 +90,7 @@ async def estimate_search(
     estimated_results = min(data.limit, MAX_LIMIT)
     estimated_time_seconds = 15 if data.pass_type == "quick" else 45
 
-    providers_used = ["MapBox Places"] if is_mapbox_configured() else []
+    providers_used = configured_provider_names()
 
     return {
         "credit_cost": credit_cost,
@@ -90,7 +99,7 @@ async def estimate_search(
         "estimated_results": estimated_results,
         "estimated_time_seconds": estimated_time_seconds,
         "providers": providers_used,
-        "provider_configured": is_mapbox_configured(),
+        "provider_configured": is_discovery_configured(),
         # Was "Real-time AI analysis" — discovery has used a licensed
         # provider since the AI fabrication path was removed.
         "data_freshness": "Live provider data",
@@ -112,12 +121,12 @@ async def run_discovery(
     """
     workspace = await ensure_workspace_for_user(current_user, db)
 
-    if not is_mapbox_configured():
+    if not is_discovery_configured():
         return {
             "status": "provider_unconfigured",
             "error": "provider_unconfigured",
-            "message": "No discovery provider is connected. Add a MapBox access token in Settings to run searches.",
-            "provider": "mapbox",
+            "message": "No discovery provider is connected. Add a Google Places API key or MapBox access token in Settings to run searches.",
+            "provider": None,
             "results": [],
             "total_results": 0,
             "credits_charged": 0,
@@ -207,7 +216,7 @@ async def run_discovery(
             "credits_remaining": credits_left,
             "pass_type": data.pass_type,
             "score_version": "1.0.0",
-            "data_source": "mapbox",
+            "data_source": provider_for_results(scored_results),
         }
 
     except Exception as e:
@@ -276,8 +285,11 @@ async def list_search_jobs(
 async def get_discovery_filters():
     """Get available filter options for discovery"""
     return {
+        "google_places_connected": is_google_places_configured(),
         "mapbox_connected": is_mapbox_configured(),
         "pagespeed_connected": is_pagespeed_configured(),
+        "discovery_provider": active_provider_slug(),
+        "max_results": MAX_LIMIT,
         # Only countries where the provider actually returns business POIs.
         # Japan, South Africa and Nigeria were removed after testing: MapBox
         # returns zero POIs for every category there, including from major

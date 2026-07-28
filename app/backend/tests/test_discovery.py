@@ -78,7 +78,7 @@ def _forbid_ai_discovery(monkeypatch):
 
 async def test_unconfigured_provider_returns_setup_state(user_a_client, db_session, monkeypatch):
     workspace = await _seed_workspace(db_session)
-    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: False)
+    monkeypatch.setattr(discover, "is_discovery_configured", lambda: False)
 
     response = await user_a_client.post("/api/v1/discover/run", json={"country": "United Kingdom"})
     assert response.status_code == 200
@@ -89,7 +89,7 @@ async def test_unconfigured_provider_returns_setup_state(user_a_client, db_sessi
 
 async def test_unconfigured_provider_charges_no_credits(user_a_client, db_session, monkeypatch):
     workspace = await _seed_workspace(db_session)
-    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: False)
+    monkeypatch.setattr(discover, "is_discovery_configured", lambda: False)
 
     await user_a_client.post("/api/v1/discover/run", json={"country": "United Kingdom"})
 
@@ -102,7 +102,7 @@ async def test_unconfigured_provider_charges_no_credits(user_a_client, db_sessio
 
 async def test_zero_matches_returns_no_matches_not_fabrication(user_a_client, db_session, monkeypatch):
     await _seed_workspace(db_session)
-    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: True)
+    monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
 
     async def _empty(**kwargs):
         return []
@@ -118,7 +118,7 @@ async def test_zero_matches_returns_no_matches_not_fabrication(user_a_client, db
 
 async def test_deep_pass_costs_one_credit(user_a_client, db_session, monkeypatch):
     await _seed_workspace(db_session)
-    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: True)
+    monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
 
     response = await user_a_client.post("/api/v1/discover/estimate", json={"pass_type": "deep"})
     assert response.status_code == 200
@@ -128,16 +128,31 @@ async def test_deep_pass_costs_one_credit(user_a_client, db_session, monkeypatch
 async def test_estimate_reports_the_full_provider_yield(user_a_client, db_session, monkeypatch):
     """One credit should buy as many leads as the provider will return.
 
-    The estimate hardcoded a ceiling of 15 while MapBox returns up to 25, so a
-    third of every paid search went unused and the estimate under-reported it.
+    The estimate and request ceiling must stay aligned with the selected
+    provider so the UI never submits a limit the API will reject.
     """
     await _seed_workspace(db_session)
-    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: True)
+    monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
 
     response = await user_a_client.post("/api/v1/discover/estimate", json={"category": "Restaurant"})
 
     assert response.status_code == 200
     assert response.json()["estimated_results"] == discover.MAX_LIMIT
+
+
+async def test_filters_report_google_as_primary_and_mapbox_as_fallback(anon_client, monkeypatch):
+    monkeypatch.setattr(discover, "is_google_places_configured", lambda: True)
+    monkeypatch.setattr(discover, "is_mapbox_configured", lambda: True)
+    monkeypatch.setattr(discover, "active_provider_slug", lambda: "google_places")
+
+    response = await anon_client.get("/api/v1/discover/filters")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["google_places_connected"] is True
+    assert body["mapbox_connected"] is True
+    assert body["discovery_provider"] == "google_places"
+    assert body["max_results"] == discover.MAX_LIMIT
 
 
 async def test_limit_above_the_provider_ceiling_is_rejected(user_a_client, db_session):

@@ -35,7 +35,7 @@ from models.leads import Leads
 from models.outreach_drafts import Outreach_drafts
 from schemas.auth import UserResponse
 from services.leads import LeadsService
-from services.mapbox_places import MAX_LIMIT, search_places
+from services.discovery_provider import MAX_LIMIT, search_places
 from services.outreach_composer import compose_many
 from services.qualification import qualify_website
 from services.scoring import build_score_breakdown

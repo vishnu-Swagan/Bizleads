@@ -60,6 +60,9 @@ interface BusinessResult {
 
 interface Filters {
   google_places_connected: boolean;
+  mapbox_connected: boolean;
+  discovery_provider: 'google_places' | 'mapbox' | null;
+  max_results: number;
   countries: string[];
   categories: string[];
   website_states: Array<{ value: string; label: string }>;
@@ -119,7 +122,7 @@ export default function AppDiscover() {
           query: query || null,
           country: country === 'all' ? null : country,
           category: category === 'all' ? null : category,
-          limit: 25,
+          limit: filters?.max_results ?? 20,
           pass_type: passType,
         },
       });
@@ -153,7 +156,7 @@ export default function AppDiscover() {
           country: country === 'all' ? null : country,
           category: category === 'all' ? null : category,
           website_state: websiteState,
-          limit: 25,
+          limit: filters?.max_results ?? 20,
           pass_type: passType,
         },
         options: { timeout: 120000 },
@@ -520,7 +523,11 @@ export default function AppDiscover() {
                   </Button>
                 )}
                 <Badge variant="outline" className="text-xs border-green-200 text-green-700 bg-green-50">
-                  Source: MapBox Places
+                  Source: {dataSource === 'google_places'
+                    ? 'Google Places'
+                    : dataSource === 'mapbox'
+                    ? 'MapBox Places'
+                    : 'Connected provider'}
                 </Badge>
               </div>
             </div>

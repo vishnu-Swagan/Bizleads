@@ -51,6 +51,9 @@ services:
       # Use a PUBLIC pk. token restricted by URL, never an sk. secret token.
       - key: MAPBOX_ACCESS_TOKEN
         sync: false
+      # Primary business discovery source. Restrict the key to Places API (New).
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
       # Optional. Without it, website quality stays at the free heuristic tier.
       - key: PAGESPEED_API_KEY
         sync: false
