@@ -78,11 +78,14 @@ const tutorialSteps: TutorialStep[] = [
   {
     id: 'settings',
     title: 'Settings & Billing',
-    description: 'Configure your Offer Profile for better Fit scoring, set up the account your outreach sends from, and handle your subscription.',
+    description: 'Set up the account your outreach sends from, and manage your plan and credits.',
     icon: Settings,
     targetPath: '/app/settings/workspace',
-    tip: 'Set up your services and target categories to improve Agency Fit scoring for discovered leads.',
-    highlight: 'Offer Profile, sending account, and plan management',
+    // Both this and the description used to walk the user through an Offer
+    // Profile that saved nothing and fed a hardcoded score. A tutorial that
+    // teaches a step which does not exist is worse than one that stays quiet.
+    tip: 'Outreach cannot send until a sending account is configured here — every customer sends from their own address.',
+    highlight: 'Sending account and plan management',
   },
 ];
 

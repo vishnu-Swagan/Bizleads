@@ -217,9 +217,14 @@ export default function AppDashboard() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50">
                   <Zap className="h-5 w-5 text-green-600" />
                 </div>
+                {/* Was "Offer Profile — Configure services for better Fit
+                    scoring", pointing at a card that has been removed: it
+                    saved nothing, and the Fit score it named is a hardcoded
+                    constant. This now names the one thing on that page a
+                    customer must actually do before outreach can send. */}
                 <div>
-                  <h3 className="font-medium text-slate-900">Offer Profile</h3>
-                  <p className="text-xs text-slate-500">Configure services for better Fit scoring</p>
+                  <h3 className="font-medium text-slate-900">Sending account</h3>
+                  <p className="text-xs text-slate-500">Set the address your outreach sends from</p>
                 </div>
               </div>
             </CardContent>
