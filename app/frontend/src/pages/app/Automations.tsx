@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import AppShell from '@/components/AppShell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
@@ -22,6 +23,7 @@ import { client } from '@/lib/api';
 import {
   CheckCircle2, XCircle, Mail, Send, Loader2, ExternalLink, Sparkles,
   AlertCircle, CalendarClock, Plus, Play, Pencil, Trash2, Inbox, X,
+  Wand2, Undo2, Bot,
 } from 'lucide-react';
 
 /**
@@ -39,6 +41,7 @@ import {
  */
 
 interface Draft {
+  id?: number;
   lead_id: number;
   business_name: string;
   to_email: string;
@@ -46,6 +49,31 @@ interface Draft {
   body_text: string;
   body_html: string;
   based_on: string;
+}
+
+/** Wording style passed to the AI polish/draft endpoints. Never changes facts. */
+type Tone = 'professional' | 'friendly' | 'direct';
+
+const TONE_OPTIONS: { value: Tone; label: string }[] = [
+  { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
+  { value: 'direct', label: 'Direct' },
+];
+
+/** GET /api/v1/outreach/ai/status. Never assume available before this resolves. */
+interface AiStatus {
+  available: boolean;
+  model: string | null;
+}
+
+/** Counts measured findings a draft cites, from its `based_on` JSON string. Malformed or missing data honestly counts as zero, never a guess. */
+function countBasedOn(basedOn: string | null | undefined): number {
+  try {
+    const parsed = JSON.parse(basedOn || '[]');
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 interface Skipped {
@@ -107,6 +135,7 @@ interface QueueItem {
   based_on: string;
   sequence_step?: number;
   status: string;
+  send_error?: string | null;
   created_at: string;
 }
 
@@ -124,11 +153,190 @@ function formatWhen(iso: string | null): string | null {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/**
+ * Shared AI control row: tone + "Improve writing" + optional "Rewrite with
+ * AI" + "Revert". Used by both the Draft-from-findings results and the
+ * Approval queue rows so the two do not drift into different behaviour.
+ *
+ * Every control is disabled — with a tooltip naming why — whenever AI is
+ * unavailable, still loading, or the row itself is mid-action. Wrapping each
+ * disabled Button in a <span> is required for the tooltip: a native
+ * `disabled` button drops pointer-events entirely, so nothing would ever
+ * trigger the hover without it.
+ */
+function AiControls({
+  idPrefix,
+  tone,
+  onToneChange,
+  onPolish,
+  polishing,
+  onRewrite,
+  rewriting,
+  canRevert,
+  onRevert,
+  aiAvailable,
+  aiUnavailableReason,
+  rowDisabled,
+}: {
+  idPrefix: string;
+  tone: Tone;
+  onToneChange: (t: Tone) => void;
+  onPolish: () => void;
+  polishing: boolean;
+  onRewrite?: () => void;
+  rewriting?: boolean;
+  canRevert: boolean;
+  onRevert: () => void;
+  aiAvailable: boolean;
+  aiUnavailableReason: string;
+  rowDisabled?: boolean;
+}) {
+  const controlsDisabled = !aiAvailable || !!rowDisabled;
+  const toneId = `${idPrefix}-tone`;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+      <Bot className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor={toneId} className="text-xs text-slate-500">
+          Tone
+        </Label>
+        <Select value={tone} onValueChange={(v) => onToneChange(v as Tone)} disabled={controlsDisabled}>
+          <SelectTrigger
+            id={toneId}
+            className="h-8 w-[128px] border-slate-200 text-xs cursor-pointer disabled:cursor-not-allowed"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TONE_OPTIONS.map((t) => (
+              <SelectItem key={t.value} value={t.value}>
+                {t.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onPolish}
+              disabled={controlsDisabled || polishing}
+              className="h-8 gap-1.5 border-slate-200 text-xs cursor-pointer disabled:cursor-not-allowed"
+            >
+              {polishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+              Improve writing
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {aiAvailable ? 'Rewrites the wording only — never adds or changes a fact' : aiUnavailableReason}
+        </TooltipContent>
+      </Tooltip>
+
+      {onRewrite && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onRewrite}
+                disabled={controlsDisabled || !!rewriting}
+                className="h-8 gap-1.5 border-slate-200 text-xs cursor-pointer disabled:cursor-not-allowed"
+              >
+                {rewriting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                Rewrite with AI
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {aiAvailable
+              ? "Writes a fresh email from this lead's same measured findings"
+              : aiUnavailableReason}
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {canRevert && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onRevert}
+          disabled={!!rowDisabled}
+          className="h-8 gap-1.5 text-xs text-slate-500 cursor-pointer disabled:cursor-not-allowed"
+        >
+          <Undo2 className="h-3.5 w-3.5" />
+          Revert
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Small status badge for a queued draft's lifecycle. Failed carries its error inline, never just a red dot. */
+function QueueStatusBadge({ status, sendError }: { status: string; sendError?: string | null }) {
+  if (status === 'sent') {
+    return (
+      <Badge className="gap-1 border-green-200 bg-green-50 text-xs text-green-700">
+        <CheckCircle2 className="h-3 w-3" />
+        Sent
+      </Badge>
+    );
+  }
+  if (status === 'discarded') {
+    return (
+      <Badge variant="outline" className="text-xs border-slate-200 text-slate-500">
+        Discarded
+      </Badge>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge className="gap-1 border-red-200 bg-red-50 text-xs text-red-700 cursor-default">
+            <AlertCircle className="h-3 w-3" />
+            Failed
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>{sendError || 'Send failed'}</TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-xs border-amber-200 bg-amber-50 text-amber-800">
+      Pending
+    </Badge>
+  );
+}
+
 export default function AppAutomations() {
   const { user } = useAuth();
   const [status, setStatus] = useState<EmailStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [catchingUp, setCatchingUp] = useState(false);
+
+  // AI writing assistant: status + per-item polish/rewrite state. AI only
+  // ever touches wording — the facts it works from are whatever is already
+  // in the subject/body, which itself only ever came from measured findings.
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [aiStatusLoading, setAiStatusLoading] = useState(true);
+  const aiAvailable = aiStatus?.available === true;
+  const aiUnavailableReason = aiStatusLoading
+    ? 'Checking AI availability…'
+    : 'AI writing help is not configured for this workspace.';
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -137,6 +345,13 @@ export default function AppAutomations() {
   const [composing, setComposing] = useState(false);
   const [sendingAll, setSendingAll] = useState(false);
   const [sentIds, setSentIds] = useState<Set<number>>(new Set());
+  const [draftErrors, setDraftErrors] = useState<Record<number, string>>({});
+
+  // Per-draft AI state, keyed by lead_id.
+  const [draftTone, setDraftTone] = useState<Record<number, Tone>>({});
+  const [draftPolishing, setDraftPolishing] = useState<Set<number>>(new Set());
+  const [draftRewriting, setDraftRewriting] = useState<Set<number>>(new Set());
+  const [draftPrevious, setDraftPrevious] = useState<Record<number, { subject: string; body_text: string }>>({});
 
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
@@ -144,6 +359,12 @@ export default function AppAutomations() {
   const [sending, setSending] = useState(false);
   const [senderName, setSenderName] = useState('');
   const [senderBusiness, setSenderBusiness] = useState('');
+
+  // One-off composer AI state. No lead_id here, so only "Improve writing"
+  // applies — there is nothing to re-draft from.
+  const [composerTone, setComposerTone] = useState<Tone>('professional');
+  const [composerPolishing, setComposerPolishing] = useState(false);
+  const [composerPrevious, setComposerPrevious] = useState<string | null>(null);
 
   // Scheduled automations.
   const [automations, setAutomations] = useState<Automation[]>([]);
@@ -172,15 +393,55 @@ export default function AppAutomations() {
   const [queueBusyIds, setQueueBusyIds] = useState<Set<number>>(new Set());
   const [queueSendingAll, setQueueSendingAll] = useState(false);
 
+  // Per-queue-item AI state, keyed by draft id.
+  const [queueTone, setQueueTone] = useState<Record<number, Tone>>({});
+  const [queuePolishing, setQueuePolishing] = useState<Set<number>>(new Set());
+  const [queueRewriting, setQueueRewriting] = useState<Set<number>>(new Set());
+  const [queuePrevious, setQueuePrevious] = useState<Record<number, { subject: string; body_text: string }>>({});
+
   useEffect(() => {
     if (user) {
       void loadStatus();
+      void loadAiStatus();
       void loadLeads();
       void loadFilters();
       void loadAutomations().then(() => void catchUpDueAutomations());
       void loadQueue();
     }
   }, [user]);
+
+  const loadAiStatus = async () => {
+    setAiStatusLoading(true);
+    try {
+      const res = await client.apiCall.invoke({ url: '/api/v1/outreach/ai/status', method: 'GET', data: {} });
+      setAiStatus({ available: res.data?.available === true, model: res.data?.model ?? null });
+    } catch {
+      // Absent status means "assume unavailable", never a fabricated model name.
+      setAiStatus({ available: false, model: null });
+    } finally {
+      setAiStatusLoading(false);
+    }
+  };
+
+  /** POST /ai/polish for the current edited text. Never invents new facts — wording only. */
+  const callAiPolish = async (text: string, tone: Tone): Promise<string> => {
+    const res = await client.apiCall.invoke({
+      url: '/api/v1/outreach/ai/polish',
+      method: 'POST',
+      data: { text, tone },
+    });
+    return typeof res.data?.text === 'string' ? res.data.text : text;
+  };
+
+  /** POST /ai/draft — a fresh email written only from that lead's stored measured findings. */
+  const callAiDraft = async (leadId: number, tone: Tone) => {
+    const res = await client.apiCall.invoke({
+      url: '/api/v1/outreach/ai/draft',
+      method: 'POST',
+      data: { lead_id: leadId, tone },
+    });
+    return res.data as { subject: string; body_text: string; based_on: string };
+  };
 
   /**
    * Run anything that has fallen due, whenever the page is opened.
@@ -392,27 +653,35 @@ export default function AppAutomations() {
     setQueue((prev) => prev.map((q) => (q.id === id ? { ...q, [field]: value } : q)));
   };
 
-  const queueBasedOnCount = (item: QueueItem) => {
-    try {
-      const parsed = JSON.parse(item.based_on || '[]');
-      return Array.isArray(parsed) ? parsed.length : 0;
-    } catch {
-      return 0;
-    }
-  };
-
   const sendQueueItem = async (item: QueueItem) => {
     setQueueBusyIds((prev) => new Set(prev).add(item.id));
     try {
-      await client.apiCall.invoke({
+      const res = await client.apiCall.invoke({
         url: `/api/v1/outreach/queue/${item.id}/send`,
         method: 'POST',
         // Send the edited subject/body — sending the original would silently
         // discard whatever the reviewer just changed.
         data: { subject: item.subject, body_text: item.body_text },
       });
-      setQueue((prev) => prev.filter((q) => q.id !== item.id));
-      toast.success(`Sent to ${item.to_email}`);
+      const resultStatus: string = res.data?.status ?? 'sent';
+      if (resultStatus === 'sent') {
+        setQueue((prev) => prev.filter((q) => q.id !== item.id));
+        toast.success(`Sent to ${item.to_email}`);
+      } else {
+        // A 200 response does not always mean delivery succeeded — the send
+        // itself can still fail (bad recipient, provider error). Surface that
+        // instead of reporting a send that did not actually happen.
+        const sendError = res.data?.send_error ?? 'Send failed';
+        setQueue((prev) =>
+          prev.map((q) => (q.id === item.id ? { ...q, status: resultStatus, send_error: sendError } : q)),
+        );
+        toast.error(sendError);
+        setQueueBusyIds((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+      }
     } catch (err: any) {
       toast.error(err?.data?.detail ?? 'Failed to send');
       setQueueBusyIds((prev) => {
@@ -432,6 +701,61 @@ export default function AppAutomations() {
     } catch (err: any) {
       toast.error(err?.data?.detail ?? 'Failed to discard');
       setQueueBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  /** "Improve writing" on an Approval queue row: rewrites only the wording of the current edited body. */
+  const polishQueueItem = async (item: QueueItem) => {
+    setQueuePolishing((prev) => new Set(prev).add(item.id));
+    try {
+      const newText = await callAiPolish(item.body_text, queueTone[item.id] ?? 'professional');
+      setQueuePrevious((prev) => ({ ...prev, [item.id]: { subject: item.subject, body_text: item.body_text } }));
+      editQueueItem(item.id, 'body_text', newText);
+      toast.success('Wording improved — review before sending.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not improve writing');
+    } finally {
+      setQueuePolishing((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const revertQueueItem = (id: number) => {
+    const prev = queuePrevious[id];
+    if (!prev) return;
+    setQueue((list) => list.map((q) => (q.id === id ? { ...q, ...prev } : q)));
+    setQueuePrevious((p) => {
+      const next = { ...p };
+      delete next[id];
+      return next;
+    });
+  };
+
+  /** "Rewrite with AI": a fresh subject + body from the same lead's measured findings. */
+  const rewriteQueueItemWithAi = async (item: QueueItem) => {
+    setQueueRewriting((prev) => new Set(prev).add(item.id));
+    try {
+      const res = await callAiDraft(item.lead_id, queueTone[item.id] ?? 'professional');
+      setQueuePrevious((prev) => ({ ...prev, [item.id]: { subject: item.subject, body_text: item.body_text } }));
+      setQueue((list) =>
+        list.map((q) =>
+          q.id === item.id
+            ? { ...q, subject: res.subject, body_text: res.body_text, based_on: res.based_on }
+            : q,
+        ),
+      );
+      toast.success('Rewritten from the same measured findings.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not rewrite with AI');
+    } finally {
+      setQueueRewriting((prev) => {
         const next = new Set(prev);
         next.delete(item.id);
         return next;
@@ -497,14 +821,20 @@ export default function AppAutomations() {
           sender_business: senderBusiness.trim() || null,
         },
       });
-      setDrafts(res.data?.drafts ?? []);
+      const newDrafts: Draft[] = res.data?.drafts ?? [];
+      setDrafts(newDrafts);
       setSkipped(res.data?.skipped ?? []);
       setSentIds(new Set());
-      if (!res.data?.drafts?.length) {
+      setDraftErrors({});
+      setDraftPrevious({});
+      if (!newDrafts.length) {
         toast.info('No drafts — those leads had nothing measurable to write about.');
       } else {
-        toast.success(`Drafted ${res.data.drafts.length} email(s) from measured findings`);
+        toast.success(`Drafted ${newDrafts.length} email(s) from measured findings`);
       }
+      // Compose persists every draft to the queue now, so the Approval queue
+      // below should reflect them immediately rather than only after a reload.
+      await loadQueue();
     } catch (err: any) {
       toast.error(err?.data?.detail ?? 'Could not draft emails');
     } finally {
@@ -519,18 +849,29 @@ export default function AppAutomations() {
   };
 
   const sendDraft = async (draft: Draft) => {
-    await client.apiCall.invoke({
-      url: '/api/v1/outreach/send-email',
-      method: 'POST',
-      data: {
-        to_email: draft.to_email,
-        subject: draft.subject,
-        // Re-derive the HTML from the edited text so an edit is never lost:
-        // sending the original body_html would silently discard the change.
-        body_html: draft.body_text.replace(/\n/g, '<br>'),
-        body_text: draft.body_text,
-      },
-    });
+    if (draft.id != null) {
+      // Compose persisted this draft to the queue, so sending must go through
+      // that same queue row — sending via /send-email directly would leave a
+      // duplicate "pending" row sitting in the Approval queue forever.
+      await client.apiCall.invoke({
+        url: `/api/v1/outreach/queue/${draft.id}/send`,
+        method: 'POST',
+        data: { subject: draft.subject, body_text: draft.body_text },
+      });
+    } else {
+      await client.apiCall.invoke({
+        url: '/api/v1/outreach/send-email',
+        method: 'POST',
+        data: {
+          to_email: draft.to_email,
+          subject: draft.subject,
+          // Re-derive the HTML from the edited text so an edit is never lost:
+          // sending the original body_html would silently discard the change.
+          body_html: draft.body_text.replace(/\n/g, '<br>'),
+          body_text: draft.body_text,
+        },
+      });
+    }
   };
 
   const sendAllDrafts = async () => {
@@ -539,23 +880,83 @@ export default function AppAutomations() {
 
     setSendingAll(true);
     const sent = new Set(sentIds);
+    const errors: Record<number, string> = { ...draftErrors };
     let failed = 0;
 
     for (const draft of pending) {
       try {
         await sendDraft(draft);
         sent.add(draft.lead_id);
-      } catch {
+        delete errors[draft.lead_id];
+      } catch (err: any) {
         failed += 1;
+        errors[draft.lead_id] = err?.data?.detail ?? err?.message ?? 'Failed to send';
       }
     }
 
     setSentIds(sent);
+    setDraftErrors(errors);
     setSendingAll(false);
     const ok = pending.length - failed;
     if (!failed) toast.success(`Sent ${ok} email(s)`);
     else if (!ok) toast.error(`All ${failed} failed to send`);
     else toast.warning(`Sent ${ok}, ${failed} failed`);
+    await loadQueue();
+  };
+
+  /** "Improve writing" on a Draft-from-findings result: rewrites only the wording of the current edited body. */
+  const polishDraft = async (d: Draft) => {
+    setDraftPolishing((prev) => new Set(prev).add(d.lead_id));
+    try {
+      const newText = await callAiPolish(d.body_text, draftTone[d.lead_id] ?? 'professional');
+      setDraftPrevious((prev) => ({ ...prev, [d.lead_id]: { subject: d.subject, body_text: d.body_text } }));
+      setDrafts((prev) => prev.map((x) => (x.lead_id === d.lead_id ? { ...x, body_text: newText } : x)));
+      toast.success('Wording improved — review before sending.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not improve writing');
+    } finally {
+      setDraftPolishing((prev) => {
+        const next = new Set(prev);
+        next.delete(d.lead_id);
+        return next;
+      });
+    }
+  };
+
+  const revertDraft = (leadId: number) => {
+    const prev = draftPrevious[leadId];
+    if (!prev) return;
+    setDrafts((list) => list.map((x) => (x.lead_id === leadId ? { ...x, ...prev } : x)));
+    setDraftPrevious((p) => {
+      const next = { ...p };
+      delete next[leadId];
+      return next;
+    });
+  };
+
+  /** "Rewrite with AI": a fresh subject + body from the same lead's measured findings. */
+  const rewriteDraftWithAi = async (d: Draft) => {
+    setDraftRewriting((prev) => new Set(prev).add(d.lead_id));
+    try {
+      const res = await callAiDraft(d.lead_id, draftTone[d.lead_id] ?? 'professional');
+      setDraftPrevious((prev) => ({ ...prev, [d.lead_id]: { subject: d.subject, body_text: d.body_text } }));
+      setDrafts((prev) =>
+        prev.map((x) =>
+          x.lead_id === d.lead_id
+            ? { ...x, subject: res.subject, body_text: res.body_text, based_on: res.based_on }
+            : x,
+        ),
+      );
+      toast.success('Rewritten from the same measured findings.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not rewrite with AI');
+    } finally {
+      setDraftRewriting((prev) => {
+        const next = new Set(prev);
+        next.delete(d.lead_id);
+        return next;
+      });
+    }
   };
 
   const loadStatus = async () => {
@@ -602,6 +1003,28 @@ export default function AppAutomations() {
     } finally {
       setSending(false);
     }
+  };
+
+  /** "Improve writing" for the manually-typed one-off email — the "auto-correct" ask. */
+  const polishComposerBody = async () => {
+    if (!body.trim()) return;
+    setComposerPolishing(true);
+    try {
+      const newText = await callAiPolish(body, composerTone);
+      setComposerPrevious(body);
+      setBody(newText);
+      toast.success('Wording improved — review before sending.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not improve writing');
+    } finally {
+      setComposerPolishing(false);
+    }
+  };
+
+  const revertComposerBody = () => {
+    if (composerPrevious === null) return;
+    setBody(composerPrevious);
+    setComposerPrevious(null);
   };
 
   return (
@@ -744,6 +1167,51 @@ export default function AppAutomations() {
           </CardContent>
         </Card>
 
+        {/* AI writing assistant status — visible everywhere the rest of the page uses it. */}
+        <Card className="border-slate-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Bot className="h-4 w-4 text-slate-500" />
+              AI writing assistant
+            </CardTitle>
+            <CardDescription>
+              AI only ever rewrites wording. Every fact in an email — the score, the missing
+              feature, whatever it cites — comes from what Qualify actually measured on the
+              prospect&rsquo;s site. It never researches or invents anything on its own.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {aiStatusLoading ? (
+              <Skeleton className="h-8 w-48" />
+            ) : aiAvailable ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge className="bg-green-50 text-green-700 border-green-200 gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Available
+                </Badge>
+                <span className="text-sm text-slate-600">
+                  Model <strong className="text-slate-900">{aiStatus?.model ?? 'unknown'}</strong>
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800 gap-1.5">
+                  <XCircle className="h-3.5 w-3.5" />
+                  Not configured
+                </Badge>
+                <span className="text-sm text-slate-600">
+                  Set{' '}
+                  <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-800">
+                    ANTHROPIC_API_KEY
+                  </code>{' '}
+                  in your Render dashboard to turn on wording help. Drafting from findings and
+                  sending still work without it.
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Scheduled automations: repeats Discover (+ optional Qualify/Draft) on a cadence. */}
         <Card className="border-slate-200">
           <CardHeader className="pb-3">
@@ -753,11 +1221,11 @@ export default function AppAutomations() {
                   <CalendarClock className="h-4 w-4 text-slate-500" />
                   Automations
                 </CardTitle>
-                <p className="mt-1 text-sm text-slate-500">
+                <CardDescription className="mt-1">
                   Repeats a Discover search on a schedule, and can optionally qualify and draft
                   outreach for what it finds. Nothing is ever sent automatically — drafts wait
                   in the approval queue below.
-                </p>
+                </CardDescription>
                 {/*
                   Say plainly when scheduled work actually happens. A "Daily"
                   badge with no explanation implies a server is watching the
@@ -1081,10 +1549,11 @@ export default function AppAutomations() {
                   <Inbox className="h-4 w-4 text-slate-500" />
                   Approval queue
                 </CardTitle>
-                <p className="mt-1 text-sm text-slate-500">
+                <CardDescription className="mt-1">
                   Drafts your automations wrote. Nothing here sends itself — review, edit if needed, then
-                  send or discard.
-                </p>
+                  send or discard. AI can help with wording below; the facts stay exactly what was
+                  measured.
+                </CardDescription>
               </div>
               {queue.length > 0 && (
                 <Button
@@ -1123,8 +1592,10 @@ export default function AppAutomations() {
             ) : (
               <div className="space-y-4">
                 {queue.map((item) => {
-                  const busy = queueBusyIds.has(item.id);
-                  const basedOnCount = queueBasedOnCount(item);
+                  const actionBusy = queueBusyIds.has(item.id);
+                  const aiBusy = queuePolishing.has(item.id) || queueRewriting.has(item.id);
+                  const rowLocked = actionBusy || aiBusy || item.status !== 'pending';
+                  const basedOnCount = countBasedOn(item.based_on);
                   return (
                     <div key={item.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1134,49 +1605,74 @@ export default function AppAutomations() {
                           </p>
                           <p className="truncate text-xs text-slate-500">{item.to_email}</p>
                         </div>
-                        <Badge variant="outline" className="shrink-0 text-xs border-slate-200">
-                          from {basedOnCount} measured finding{basedOnCount === 1 ? '' : 's'}
-                        </Badge>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge variant="outline" className="text-xs border-slate-200">
+                            from {basedOnCount} measured finding{basedOnCount === 1 ? '' : 's'}
+                          </Badge>
+                          <QueueStatusBadge status={item.status} sendError={item.send_error} />
+                        </div>
                       </div>
+                      <Label htmlFor={`queue-subject-${item.id}`} className="sr-only">
+                        Subject
+                      </Label>
                       <Input
+                        id={`queue-subject-${item.id}`}
                         value={item.subject}
                         onChange={(e) => editQueueItem(item.id, 'subject', e.target.value)}
-                        disabled={busy}
-                        className="border-slate-200 font-medium"
+                        disabled={rowLocked}
+                        className="border-slate-200 font-medium disabled:cursor-not-allowed"
                       />
+                      <Label htmlFor={`queue-body-${item.id}`} className="sr-only">
+                        Message
+                      </Label>
                       <Textarea
+                        id={`queue-body-${item.id}`}
                         rows={7}
                         value={item.body_text}
                         onChange={(e) => editQueueItem(item.id, 'body_text', e.target.value)}
-                        disabled={busy}
-                        className="border-slate-200 text-sm"
+                        disabled={rowLocked}
+                        className="border-slate-200 text-sm disabled:cursor-not-allowed"
                       />
                       <div className="flex flex-wrap items-center gap-2">
                         <Button
                           size="sm"
                           onClick={() => sendQueueItem(item)}
-                          disabled={busy || !status?.configured}
+                          disabled={rowLocked || !status?.configured}
                           className="bg-indigo-600 hover:bg-indigo-700 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                           title={!status?.configured ? 'Configure email delivery above first' : undefined}
                         >
-                          {busy ? (
+                          {actionBusy ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : (
                             <Send className="h-3.5 w-3.5" />
                           )}
-                          {busy ? 'Sending...' : 'Send'}
+                          {actionBusy ? 'Sending...' : 'Send'}
                         </Button>
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => discardQueueItem(item)}
-                          disabled={busy}
+                          disabled={rowLocked}
                           className="border-slate-200 gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                         >
                           <X className="h-3.5 w-3.5" />
                           Discard
                         </Button>
                       </div>
+                      <AiControls
+                        idPrefix={`queue-${item.id}`}
+                        tone={queueTone[item.id] ?? 'professional'}
+                        onToneChange={(t) => setQueueTone((prev) => ({ ...prev, [item.id]: t }))}
+                        onPolish={() => polishQueueItem(item)}
+                        polishing={queuePolishing.has(item.id)}
+                        onRewrite={() => rewriteQueueItemWithAi(item)}
+                        rewriting={queueRewriting.has(item.id)}
+                        canRevert={!!queuePrevious[item.id]}
+                        onRevert={() => revertQueueItem(item.id)}
+                        aiAvailable={aiAvailable}
+                        aiUnavailableReason={aiUnavailableReason}
+                        rowDisabled={rowLocked}
+                      />
                     </div>
                   );
                 })}
@@ -1192,10 +1688,11 @@ export default function AppAutomations() {
               <Sparkles className="h-4 w-4 text-slate-500" />
               Draft from findings
             </CardTitle>
-            <p className="text-sm text-slate-500">
+            <CardDescription>
               Every sentence is written from what we measured on the prospect&rsquo;s site.
-              Nothing is invented — a lead with nothing measurable gets no email.
-            </p>
+              Nothing is invented — a lead with nothing measurable gets no email. AI, where
+              available, can only reword what is already here.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -1311,42 +1808,85 @@ export default function AppAutomations() {
                   </Button>
                 </div>
 
-                {drafts.map((d) => (
-                  <div key={d.lead_id} className="rounded-lg border border-slate-200 p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-900">
-                          {d.business_name}
-                        </p>
-                        <p className="truncate text-xs text-slate-500">{d.to_email}</p>
+                {drafts.map((d) => {
+                  const sent = sentIds.has(d.lead_id);
+                  const draftError = draftErrors[d.lead_id];
+                  const aiBusy = draftPolishing.has(d.lead_id) || draftRewriting.has(d.lead_id);
+                  const rowLocked = sent || sendingAll || aiBusy;
+                  const basedOnCount = countBasedOn(d.based_on);
+                  return (
+                    <div key={d.lead_id} className="rounded-lg border border-slate-200 p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">
+                            {d.business_name}
+                          </p>
+                          <p className="truncate text-xs text-slate-500">{d.to_email}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge variant="outline" className="text-xs border-slate-200">
+                            from {basedOnCount} measured finding{basedOnCount === 1 ? '' : 's'}
+                          </Badge>
+                          {sent ? (
+                            <Badge className="bg-green-50 text-green-700 border-green-200 gap-1">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Sent
+                            </Badge>
+                          ) : draftError ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge className="gap-1 border-red-200 bg-red-50 text-xs text-red-700 cursor-default">
+                                  <AlertCircle className="h-3 w-3" />
+                                  Failed
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>{draftError}</TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Badge variant="outline" className="text-xs border-amber-200 bg-amber-50 text-amber-800">
+                              Pending
+                            </Badge>
+                          )}
+                        </div>
                       </div>
-                      {sentIds.has(d.lead_id) ? (
-                        <Badge className="bg-green-50 text-green-700 border-green-200 gap-1">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Sent
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs border-slate-200">
-                          from {JSON.parse(d.based_on || '[]').length} measured finding
-                          {JSON.parse(d.based_on || '[]').length === 1 ? '' : 's'}
-                        </Badge>
-                      )}
+                      <Label htmlFor={`draft-subject-${d.lead_id}`} className="sr-only">
+                        Subject
+                      </Label>
+                      <Input
+                        id={`draft-subject-${d.lead_id}`}
+                        value={d.subject}
+                        onChange={(e) => editDraft(d.lead_id, 'subject', e.target.value)}
+                        disabled={rowLocked}
+                        className="border-slate-200 font-medium disabled:cursor-not-allowed"
+                      />
+                      <Label htmlFor={`draft-body-${d.lead_id}`} className="sr-only">
+                        Message
+                      </Label>
+                      <Textarea
+                        id={`draft-body-${d.lead_id}`}
+                        rows={9}
+                        value={d.body_text}
+                        onChange={(e) => editDraft(d.lead_id, 'body_text', e.target.value)}
+                        disabled={rowLocked}
+                        className="border-slate-200 text-sm disabled:cursor-not-allowed"
+                      />
+                      <AiControls
+                        idPrefix={`draft-${d.lead_id}`}
+                        tone={draftTone[d.lead_id] ?? 'professional'}
+                        onToneChange={(t) => setDraftTone((prev) => ({ ...prev, [d.lead_id]: t }))}
+                        onPolish={() => polishDraft(d)}
+                        polishing={draftPolishing.has(d.lead_id)}
+                        onRewrite={() => rewriteDraftWithAi(d)}
+                        rewriting={draftRewriting.has(d.lead_id)}
+                        canRevert={!!draftPrevious[d.lead_id]}
+                        onRevert={() => revertDraft(d.lead_id)}
+                        aiAvailable={aiAvailable}
+                        aiUnavailableReason={aiUnavailableReason}
+                        rowDisabled={sent || sendingAll}
+                      />
                     </div>
-                    <Input
-                      value={d.subject}
-                      onChange={(e) => editDraft(d.lead_id, 'subject', e.target.value)}
-                      disabled={sentIds.has(d.lead_id)}
-                      className="border-slate-200 font-medium"
-                    />
-                    <Textarea
-                      rows={9}
-                      value={d.body_text}
-                      onChange={(e) => editDraft(d.lead_id, 'body_text', e.target.value)}
-                      disabled={sentIds.has(d.lead_id)}
-                      className="border-slate-200 text-sm"
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -1355,6 +1895,10 @@ export default function AppAutomations() {
         <Card className="border-slate-200">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Send a one-off email</CardTitle>
+            <CardDescription>
+              Written by hand. AI can clean up the wording below — quote the real numbers from
+              Qualify yourself; it will not verify anything on its own.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -1400,6 +1944,71 @@ export default function AppAutomations() {
                 disabled={!status?.configured}
                 className="border-slate-200"
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="composer-tone" className="text-xs text-slate-500">
+                Tone
+              </Label>
+              <Select
+                value={composerTone}
+                onValueChange={(v) => setComposerTone(v as Tone)}
+                disabled={!aiAvailable}
+              >
+                <SelectTrigger
+                  id="composer-tone"
+                  className="h-8 w-[128px] border-slate-200 text-xs cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TONE_OPTIONS.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={polishComposerBody}
+                      disabled={!aiAvailable || composerPolishing || !body.trim()}
+                      className="h-8 gap-1.5 border-slate-200 text-xs cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      {composerPolishing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Wand2 className="h-3.5 w-3.5" />
+                      )}
+                      Improve writing
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {!aiAvailable
+                    ? aiUnavailableReason
+                    : !body.trim()
+                      ? 'Write a message first'
+                      : 'Rewrites the wording only — never adds or changes a fact'}
+                </TooltipContent>
+              </Tooltip>
+              {composerPrevious !== null && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={revertComposerBody}
+                  className="h-8 gap-1.5 text-xs text-slate-500 cursor-pointer"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  Revert
+                </Button>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-3">

@@ -18,8 +18,9 @@ from models.outreach_drafts import Outreach_drafts
 from services.pagespeed import is_pagespeed_configured, audit_website, bulk_audit
 from services.email_sender import send_email, send_bulk_emails, get_email_config_status
 from services.email_identity import resolve_identity
-from services.outreach_composer import compose_many
+from services.outreach_composer import compose_many, parse_findings
 from services.leads import LeadsService
+from services import ai_writer
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,107 @@ async def compose_drafts(
     result["email_configured"] = (await resolve_identity(db, current_user.id)) is not None
     result["queued"] = len(result.get("drafts", []))
     return result
+
+
+# --- AI-assisted wording -----------------------------------------------
+#
+# See services/ai_writer.py's module docstring for the rule this whole
+# surface exists under: AI may improve WORDING, AI must never introduce a
+# FACT. `/ai/draft` is grounded only in a lead's own measured findings (the
+# same ones services/outreach_composer.py reads) and refuses to run when
+# there are none. `/ai/polish` only ever sees text the caller already wrote.
+# Both endpoints are auth-gated, user-scoped, and return a clear 503 rather
+# than a silent fallback when ANTHROPIC_API_KEY is unset - a user must never
+# mistake the deterministic composer's output for an AI-assisted one.
+
+_AI_NOT_CONFIGURED_DETAIL = (
+    "AI-assisted writing is not configured on this server. Set "
+    "ANTHROPIC_API_KEY to enable it."
+)
+_AI_UNAVAILABLE_DETAIL = "AI writing is temporarily unavailable. Please try again shortly."
+
+
+class AIPolishRequest(BaseModel):
+    text: str
+    tone: Optional[str] = "professional"
+
+
+class AIDraftRequest(BaseModel):
+    lead_id: int
+    tone: Optional[str] = "professional"
+
+
+@router.post("/ai/polish")
+async def ai_polish_text(
+    data: AIPolishRequest,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Improve grammar/clarity/tone of text the caller wrote. Never adds a claim."""
+    if not ai_writer.is_ai_configured():
+        raise HTTPException(status_code=503, detail=_AI_NOT_CONFIGURED_DETAIL)
+
+    if not (data.text or "").strip():
+        raise HTTPException(status_code=422, detail="No text provided to polish")
+
+    result = await ai_writer.polish(data.text, tone=(data.tone or "professional").strip() or "professional")
+    if result is None:
+        raise HTTPException(status_code=503, detail=_AI_UNAVAILABLE_DETAIL)
+
+    return {"text": result["text"], "changed": result["changed"], "ai_available": True}
+
+
+@router.post("/ai/draft")
+async def ai_draft_for_lead(
+    data: AIDraftRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI-drafted opening email for one lead, grounded only in its own findings.
+
+    404 if the lead does not belong to the caller - `LeadsService.get_by_id`
+    is scoped by user_id, so one customer can never draft from another's
+    lead. 409 if the lead has not been qualified yet: no findings means no
+    honest email, whether the composer or the model would be writing it.
+    """
+    if not ai_writer.is_ai_configured():
+        raise HTTPException(status_code=503, detail=_AI_NOT_CONFIGURED_DETAIL)
+
+    service = LeadsService(db)
+    lead = await service.get_by_id(data.lead_id, user_id=str(current_user.id))
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    findings = parse_findings(lead.findings)
+    if not findings:
+        raise HTTPException(
+            status_code=409,
+            detail="This lead has no measured findings yet. Qualify it first.",
+        )
+
+    draft = await ai_writer.draft_for_category(
+        business_name=lead.business_name,
+        category=lead.category,
+        findings=findings,
+        tone=(data.tone or "professional").strip() or "professional",
+    )
+    if draft is None:
+        raise HTTPException(status_code=503, detail=_AI_UNAVAILABLE_DETAIL)
+
+    return {
+        "lead_id": lead.id,
+        "subject": draft["subject"],
+        "body_text": draft["body_text"],
+        "ai_available": True,
+    }
+
+
+@router.get("/ai/status")
+async def ai_status(
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Whether AI-assisted writing is configured, and which model it uses."""
+    available = ai_writer.is_ai_configured()
+    return {"available": available, "model": ai_writer.MODEL if available else None}
 
 
 # --- Draft queue: review, send, or discard what compose/automations produced ---

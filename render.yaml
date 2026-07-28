@@ -99,6 +99,20 @@ services:
       - key: RESEND_FROM_EMAIL
         sync: false
 
+      # --- AI writing assistance ---
+      # Optional. Without it the AI buttons report "not configured" and the
+      # deterministic composer still writes every draft — outreach keeps
+      # working, it simply loses the wording polish.
+      #
+      # The model is only ever asked to improve HOW something reads. It is
+      # given the measured findings and the user's own text, and is
+      # instructed to add no claim not already present. A lead with no
+      # findings produces no email at all: the provider is not even called.
+      # That is what keeps "every claim is verifiable" true once a language
+      # model is in the loop.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
       # --- Stripe billing ---
       # STRIPE_SECRET_KEY: sk_live_... (sk_test_... while testing)
       # STRIPE_WEBHOOK_SECRET: whsec_..., shown when you add the endpoint at
