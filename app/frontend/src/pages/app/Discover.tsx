@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
+import { useCredits } from '@/contexts/CreditsContext';
 import {
   Search, Globe, AlertCircle, CreditCard, Info, Save,
   ChevronRight, Loader2, CheckCircle2, XCircle, Clock,
@@ -104,6 +105,7 @@ export default function AppDiscover() {
   // shown is the date the block was computed from.
   const [trialMessage, setTrialMessage] = useState<string>('');
   const [dataSource, setDataSource] = useState<string>('');
+  const { refresh: refreshCredits } = useCredits();
 
   useEffect(() => {
     if (user) fetchFilters();
@@ -168,6 +170,9 @@ export default function AppDiscover() {
       });
 
       const status = res.data?.status;
+      // A search charges before it knows how many results it will find, so
+      // the balance moves even on "no matches". Refresh regardless of status.
+      void refreshCredits();
       setSavedIndices(new Set());
       setResults(res.data?.results || []);
       setDataSource(res.data?.data_source || '');

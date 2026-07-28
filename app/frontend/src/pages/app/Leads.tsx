@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { client } from '@/lib/api';
+import { useCredits } from '@/contexts/CreditsContext';
 import { Search, Download, ChevronRight, AlertCircle, Gauge, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -92,6 +93,7 @@ export default function AppLeads() {
   const [stageFilter, setStageFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [qualifying, setQualifying] = useState<Set<number>>(new Set());
+  const { refresh: refreshCredits } = useCredits();
 
   /** A lead whose web presence has never been measured. */
   const isUnmeasured = (l: Lead) => l.website_score === null && l.has_website === null;
@@ -131,9 +133,14 @@ export default function AppLeads() {
       }
 
       await fetchLeads();
+      // Qualify charges per lead measured, so the header balance is stale the
+      // moment this returns. Refreshing here is what makes the spend visible
+      // at all — it was always deducted, just never shown.
+      await refreshCredits();
       toast.success(
         `Measured ${measured} lead${measured === 1 ? '' : 's'}` +
-          (topFinding ? ` · ${topFinding}` : ''),
+          (topFinding ? ` · ${topFinding}` : '') +
+          ` · ${measured} credit${measured === 1 ? '' : 's'} used`,
       );
     } catch (err: any) {
       const detail = err?.data?.detail;

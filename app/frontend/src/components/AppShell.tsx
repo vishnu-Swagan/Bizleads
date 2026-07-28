@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { CreditsProvider, useCredits } from '@/contexts/CreditsContext';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +19,7 @@ import {
 import {
   Search, LayoutDashboard, LogOut, Menu, X, Target,
   Kanban, List, BarChart3, Zap, Settings, CreditCard,
-  ChevronLeft, ChevronRight, Bell, HelpCircle,
+  ChevronLeft, ChevronRight, Bell, HelpCircle, Coins,
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -43,13 +44,27 @@ const bottomNavItems = [
   { path: '/app/settings/billing', label: 'Billing', icon: CreditCard },
 ];
 
+/**
+ * Wrapper exists solely so the header below can read the credit balance:
+ * a provider rendered inside the component that consumes it would not be in
+ * scope. The whole shell sits inside it, so every page gets the same handle.
+ */
 export default function AppShell({ children }: AppShellProps) {
+  return (
+    <CreditsProvider>
+      <AppShellInner>{children}</AppShellInner>
+    </CreditsProvider>
+  );
+}
+
+function AppShellInner({ children }: AppShellProps) {
   const { user, login, logout, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const tutorial = useTutorial();
+  const { credits } = useCredits();
 
   const isActive = (path: string) => location.pathname.startsWith(path);
 
@@ -229,6 +244,23 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* The balance, on every page. Credits were always deducted
+                correctly; they were just invisible outside Settings > Billing,
+                so spending them looked like nothing had happened. */}
+            {credits && (
+              <button
+                onClick={() => navigate('/app/settings/billing')}
+                className="hidden sm:flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs hover:border-slate-300"
+                title={`${credits.remaining} of ${credits.total} credits left on ${credits.plan_name}`}
+              >
+                <Coins className={cn('h-3.5 w-3.5', credits.remaining === 0 ? 'text-amber-500' : 'text-slate-400')} />
+                <span className={cn('font-medium', credits.remaining === 0 ? 'text-amber-700' : 'text-slate-700')}>
+                  {credits.remaining}
+                </span>
+                <span className="text-slate-400">credits</span>
+              </button>
+            )}
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
