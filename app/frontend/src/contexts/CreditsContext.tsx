@@ -27,6 +27,8 @@ interface Credits {
   total: number;
   plan_name: string;
   trial_expired: boolean;
+  /** Exempt from metering. The balance is then meaningless, not zero. */
+  unlimited: boolean;
 }
 
 interface CreditsContextValue {
@@ -53,6 +55,7 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         total: res.data?.credits_total ?? 0,
         plan_name: res.data?.plan_name ?? '',
         trial_expired: res.data?.trial_expired === true,
+        unlimited: res.data?.unlimited_credits === true,
       });
     } catch {
       // Left null so the header renders nothing rather than a zero. Showing

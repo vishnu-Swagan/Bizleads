@@ -14,6 +14,7 @@ from schemas.auth import UserResponse
 from models.workspaces import Workspaces
 from models.credit_ledger import Credit_ledger
 from dependencies.tenancy import ensure_workspace_for_user, trial_expired
+from services.entitlements import has_unlimited_credits
 
 import stripe
 
@@ -157,6 +158,7 @@ async def get_usage(
 
     plan_info = PLANS.get(workspace.plan, PLANS["trial"])
     credits_remaining = workspace.monthly_credits - workspace.credits_used
+    unmetered = has_unlimited_credits(current_user.email)
 
     return {
         "workspace_id": workspace.id,
@@ -173,8 +175,13 @@ async def get_usage(
         # routers/discover.py, so anything else would be a second
         # implementation of the same rule, free to disagree with the first —
         # and the UI would confidently say "active" while every search 403s.
-        "trial_expired": trial_expired(workspace),
+        "trial_expired": trial_expired(workspace) and not unmetered,
         "credits_reset_at": workspace.credits_reset_at,
+        # Reported so the UI can say "Unlimited" instead of a number that
+        # never moves. Without this the header would show a static balance and
+        # look like the counter had broken — the same confusion that made an
+        # invisible balance look like credits were never charged.
+        "unlimited_credits": unmetered,
     }
 
 

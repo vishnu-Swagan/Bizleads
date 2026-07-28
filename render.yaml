@@ -183,6 +183,14 @@ services:
       - key: AUTOMATION_CRON_SECRET
         sync: false
 
+      # --- Unmetered accounts ---
+      # Comma-separated emails exempt from credit metering. Unset means
+      # everybody is metered. Removes BILLING only, never authorisation — an
+      # exempt account still sees only its own data. Matched against the email
+      # in the verified JWT. See app/backend/.env.example for the full note.
+      - key: UNLIMITED_CREDIT_EMAILS
+        sync: false
+
       # --- Safety rails ---
       # Must not be "dev": the exception handler returns full stack traces when
       # it is.

@@ -30,6 +30,7 @@ from services.discovery_provider import (
 )
 from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
+from services.entitlements import has_unlimited_credits
 from services.lead_angle import write_angle_note
 from services.leads import LeadsService
 from services import ai_writer
@@ -128,7 +129,7 @@ async def run_discovery(
     # operator information, and showing it to somebody whose trial has run out
     # answers a question they did not ask while hiding the one thing they need
     # to do. Both checks still precede any job row or credit deduction.
-    _refuse_if_trial_expired(workspace)
+    _refuse_if_trial_expired(workspace, current_user.email)
 
     if not is_discovery_configured():
         return {
@@ -142,10 +143,14 @@ async def run_discovery(
             "credits_remaining": workspace.monthly_credits - workspace.credits_used,
         }
 
-    credit_cost = credit_cost_for(data.pass_type)
+    # An unmetered account pays nothing and is never refused for balance.
+    # The search itself is identical — same provider, same results, same
+    # persistence — so nothing downstream needs to know.
+    unmetered = has_unlimited_credits(current_user.email)
+    credit_cost = 0 if unmetered else credit_cost_for(data.pass_type)
     credits_remaining = workspace.monthly_credits - workspace.credits_used
 
-    if credits_remaining < credit_cost:
+    if not unmetered and credits_remaining < credit_cost:
         raise HTTPException(
             status_code=403,
             detail={
@@ -368,7 +373,7 @@ ANGLE_BUDGET_SECONDS = 90.0
 CREDITS_PER_QUALIFICATION = 1
 
 
-def _refuse_if_trial_expired(workspace) -> None:
+def _refuse_if_trial_expired(workspace, email: str = "") -> None:
     """Block the credit-spending passes once a trial has run out.
 
     Applied to Discover and Qualify only — the two operations that spend
@@ -382,6 +387,11 @@ def _refuse_if_trial_expired(workspace) -> None:
     nothing, so every trial was effectively unlimited — which competes
     directly with the paid plans.
     """
+    # An unmetered account is not on a trial in any meaningful sense —
+    # gating it would lock the operator out of their own product on day eight.
+    if has_unlimited_credits(email):
+        return
+
     ended = trial_ended_at(workspace)
     if ended is None:
         return
@@ -428,11 +438,12 @@ async def qualify_leads(
 
     workspace = await ensure_workspace_for_user(current_user, db)
     credits_remaining = workspace.monthly_credits - workspace.credits_used
-    cost = CREDITS_PER_QUALIFICATION * len(data.lead_ids)
+    unmetered = has_unlimited_credits(current_user.email)
+    cost = 0 if unmetered else CREDITS_PER_QUALIFICATION * len(data.lead_ids)
 
-    _refuse_if_trial_expired(workspace)
+    _refuse_if_trial_expired(workspace, current_user.email)
 
-    if credits_remaining < cost:
+    if not unmetered and credits_remaining < cost:
         raise HTTPException(
             status_code=403,
             detail={
@@ -472,7 +483,8 @@ async def qualify_leads(
         measurement = await qualify_website(lead.website_url, allow_audit=within_budget)
         if not within_budget:
             audits_skipped += 1
-        charged += CREDITS_PER_QUALIFICATION
+        if not unmetered:
+            charged += CREDITS_PER_QUALIFICATION
 
         scored = build_score_breakdown(
             {

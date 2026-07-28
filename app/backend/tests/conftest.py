@@ -27,8 +27,10 @@ from schemas.auth import UserResponse
 USER_A_ID = "user-a"
 USER_B_ID = "user-b"
 
-USER_A = UserResponse(id=USER_A_ID, email="a@example.com", role="user")
-USER_B = UserResponse(id=USER_B_ID, email="b@example.com", role="user")
+USER_A_EMAIL = "a@example.com"
+USER_B_EMAIL = "b@example.com"
+USER_A = UserResponse(id=USER_A_ID, email=USER_A_EMAIL, role="user")
+USER_B = UserResponse(id=USER_B_ID, email=USER_B_EMAIL, role="user")
 
 # Identity travels per-request via this header, not via global app state. FastAPI
 # reads app.dependency_overrides once per request from the shared `app` object, so
