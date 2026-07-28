@@ -60,6 +60,41 @@ class TestProviderSelection:
         assert ai_writer.active_model() == "qwen/qwen2.5-coder-32b-instruct"
 
 
+class TestTheStatusEndpointNamesTheRealModel:
+    """The badge in the UI must name the model that actually ran.
+
+    /ai/status used to return the module's MODEL constant, which is the
+    Anthropic model name specifically. With only an NVIDIA key set, the
+    endpoint therefore announced "claude-sonnet-5" while every request went to
+    NVIDIA — the app misreporting its own behaviour, which is the failure mode
+    this codebase exists to avoid.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_reports_the_nvidia_model_not_the_anthropic_constant(
+        self, user_a_client, monkeypatch
+    ):
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        body = (await user_a_client.get("/api/v1/outreach/ai/status")).json()
+
+        assert body["available"] is True
+        assert body["model"] == ai_writer.DEFAULT_NVIDIA_MODEL
+        assert body["model"] != ai_writer.MODEL, (
+            "reporting the Anthropic constant while NVIDIA serves the request "
+            "is the exact regression this guards"
+        )
+
+    @pytest.mark.asyncio
+    async def test_it_reports_an_override(self, user_a_client, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        monkeypatch.setenv("NVIDIA_MODEL", "qwen/qwen2.5-coder-32b-instruct")
+
+        body = (await user_a_client.get("/api/v1/outreach/ai/status")).json()
+
+        assert body["model"] == "qwen/qwen2.5-coder-32b-instruct"
+
+
 class TestTheRequest:
     @pytest.mark.asyncio
     async def test_it_uses_openai_shape_and_bearer_auth(self, monkeypatch):

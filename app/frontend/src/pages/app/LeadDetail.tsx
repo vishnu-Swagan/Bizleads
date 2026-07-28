@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { client } from '@/lib/api';
 import { toast } from 'sonner';
-import { ArrowLeft, Globe, Mail, Phone, Save, Plus } from 'lucide-react';
+import { ArrowLeft, Globe, Mail, Phone, Save, Plus, Sparkles, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDataSourceBadge } from './Leads';
 
@@ -37,6 +37,18 @@ interface Lead {
    *  must stay distinguishable — see parseFindings below. */
   findings?: string | null;
   qualified_at?: string | null;
+}
+
+/** GET /api/v1/outreach/ai/status. `model` names the provider actually in use. */
+interface AiStatus {
+  available: boolean;
+  model: string | null;
+}
+
+/** An AI-written opening email held in memory only — never persisted here. */
+interface AiPreview {
+  subject: string;
+  body_text: string;
 }
 
 /** One measured defect. `evidence` is the checkable detail behind `label`. */
@@ -92,9 +104,94 @@ export default function AppLeadDetail() {
   const [newNote, setNewNote] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Outreach from this lead's own findings.
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [preview, setPreview] = useState<AiPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [queued, setQueued] = useState(false);
+
   useEffect(() => {
     if (user && id) fetchLead();
   }, [user, id]);
+
+  useEffect(() => {
+    if (!user) return;
+    // Never assume available before this resolves — aiReady stays false until
+    // the server has actually said so, so the button cannot appear and then
+    // fail on click.
+    client.apiCall
+      .invoke({ url: '/api/v1/outreach/ai/status', method: 'GET', data: {} })
+      .then((res) =>
+        setAiStatus({
+          available: res.data?.available === true,
+          model: typeof res.data?.model === 'string' ? res.data.model : null,
+        }),
+      )
+      .catch(() => setAiStatus({ available: false, model: null }));
+  }, [user]);
+
+  /**
+   * Show what an AI-written opening email would say. Persists nothing.
+   *
+   * Deliberately separate from "Draft outreach" below, which writes to the
+   * approval queue. Conflating the two would mean a click that looks like a
+   * preview quietly creates something a human then has to find and discard.
+   */
+  const previewWithAi = async () => {
+    if (!lead) return;
+    setPreviewing(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/outreach/ai/draft',
+        method: 'POST',
+        data: { lead_id: lead.id, tone: 'professional' },
+        options: { timeout: 60000 },
+      });
+      setPreview({ subject: res.data?.subject ?? '', body_text: res.data?.body_text ?? '' });
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not write a preview');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  /**
+   * Write a draft for this lead into the approval queue.
+   *
+   * Uses /compose, the deterministic composer, which works whether or not a
+   * wording provider is configured and costs no credits — the measurement was
+   * already paid for at qualification. Wording help lives in Outreach, where
+   * the draft can be polished or rewritten and then actually sent; there is no
+   * second half-persisted AI path here.
+   */
+  const draftOutreach = async () => {
+    if (!lead) return;
+    setDrafting(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/outreach/compose',
+        method: 'POST',
+        data: { lead_ids: [lead.id] },
+        options: { timeout: 60000 },
+      });
+      if ((res.data?.queued ?? 0) > 0) {
+        setQueued(true);
+        toast.success('Draft added to the approval queue.');
+        return;
+      }
+      // A skipped lead is explained rather than reported as a silent success.
+      // `message` is the human sentence ("No contact email on this lead");
+      // `reason` beside it is a machine slug like "no_email" and must never
+      // reach a toast.
+      const skipped = res.data?.skipped?.[0];
+      toast.error(skipped?.message ?? 'Nothing could be drafted for this lead.');
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Could not draft outreach');
+    } finally {
+      setDrafting(false);
+    }
+  };
 
   const fetchLead = async () => {
     try {
@@ -352,6 +449,88 @@ export default function AppLeadDetail() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Turning evidence into outreach, at the moment somebody is
+                looking at the evidence. Only rendered when there is something
+                honest to write from — with no findings there is no email, the
+                same rule the composer and the model both work under. */}
+            {findings !== null && findings.length > 0 && (
+              <Card className="border-slate-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-slate-700">
+                    Turn this into outreach
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={draftOutreach} disabled={drafting} size="sm">
+                      {drafting ? (
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4 mr-1.5" />
+                      )}
+                      Draft outreach
+                    </Button>
+
+                    {/* Only offered once the server has confirmed a provider.
+                        aiStatus === null means "not asked yet", which is not
+                        the same as unavailable. */}
+                    {aiStatus?.available && (
+                      <Button
+                        onClick={previewWithAi}
+                        disabled={previewing}
+                        size="sm"
+                        variant="outline"
+                      >
+                        {previewing ? (
+                          <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-1.5" />
+                        )}
+                        Preview with AI
+                      </Button>
+                    )}
+                  </div>
+
+                  {queued && (
+                    <p className="text-sm text-slate-600">
+                      Drafted and waiting for your approval.{' '}
+                      <button
+                        onClick={() => navigate('/app/automations')}
+                        className="text-indigo-600 hover:underline font-medium"
+                      >
+                        Review in Outreach
+                      </button>{' '}
+                      — nothing sends until you approve it.
+                    </p>
+                  )}
+
+                  {preview && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-800">{preview.subject}</p>
+                        <Badge variant="outline" className="text-xs shrink-0">
+                          Preview
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-slate-600 mt-2 whitespace-pre-wrap">
+                        {preview.body_text}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-3">
+                        Written from the findings above and nothing else. Not saved — use
+                        Draft outreach to put a draft in the approval queue.
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-slate-400">
+                    {aiStatus?.available
+                      ? `Wording help is on${aiStatus.model ? ` (${aiStatus.model})` : ''}. It rewrites how the email reads and never adds a claim that isn't measured above.`
+                      : 'Drafts are written from the measured findings above.'}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="contacts" className="space-y-4">

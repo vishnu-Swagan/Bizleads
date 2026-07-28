@@ -334,12 +334,17 @@ async def compose_drafts(
 # same ones services/outreach_composer.py reads) and refuses to run when
 # there are none. `/ai/polish` only ever sees text the caller already wrote.
 # Both endpoints are auth-gated, user-scoped, and return a clear 503 rather
-# than a silent fallback when ANTHROPIC_API_KEY is unset - a user must never
+# than a silent fallback when no provider key is set - a user must never
 # mistake the deterministic composer's output for an AI-assisted one.
 
+# Names no environment variable and tells nobody to go and set one. Both keys
+# live on the API service, so that instruction described work only the operator
+# can do — and it named ANTHROPIC_API_KEY specifically, which stopped being the
+# only option when NVIDIA NIM was added. What the customer needs to know is
+# that drafting still works without it.
 _AI_NOT_CONFIGURED_DETAIL = (
-    "AI-assisted writing is not configured on this server. Set "
-    "ANTHROPIC_API_KEY to enable it."
+    "AI wording help is not available right now. Drafting from measured "
+    "findings still works."
 )
 _AI_UNAVAILABLE_DETAIL = "AI writing is temporarily unavailable. Please try again shortly."
 
@@ -422,9 +427,16 @@ async def ai_draft_for_lead(
 async def ai_status(
     current_user: UserResponse = Depends(get_current_user),
 ):
-    """Whether AI-assisted writing is configured, and which model it uses."""
-    available = ai_writer.is_ai_configured()
-    return {"available": available, "model": ai_writer.MODEL if available else None}
+    """Whether AI-assisted writing is configured, and which model it uses.
+
+    Reports active_model(), NOT the module's MODEL constant. MODEL is the
+    Anthropic model name specifically; returning it meant that with NVIDIA
+    configured the UI displayed "claude-sonnet-5" while every request actually
+    went to meta/llama-3.3-70b-instruct. active_model() resolves the same
+    provider precedence the calls themselves use, so the badge cannot drift
+    from what ran.
+    """
+    return {"available": ai_writer.is_ai_configured(), "model": ai_writer.active_model()}
 
 
 # --- Draft queue: review, send, or discard what compose/automations produced ---

@@ -64,7 +64,12 @@ _DEFAULT_TONE = "professional"
 
 
 def is_ai_configured() -> bool:
-    """Whether an Anthropic key is present right now, read fresh each call."""
+    """Whether ANY provider key is present right now, read fresh each call.
+
+    Anthropic or NVIDIA — see _provider() for the precedence. The docstring
+    said "an Anthropic key" back when that was the only option, which made
+    this read like a narrower check than it is.
+    """
     return bool(_provider()[1])
 
 

@@ -1194,18 +1194,20 @@ export default function AppAutomations() {
                 </span>
               </div>
             ) : (
+              /* Says what is degraded, not what an operator should go and
+                 configure. This previously read "Set ANTHROPIC_API_KEY in your
+                 Render dashboard" — infrastructure a customer cannot reach,
+                 and by then inaccurate too, since an NVIDIA key enables the
+                 same feature. */
               <div className="flex flex-wrap items-center gap-3">
                 <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800 gap-1.5">
                   <XCircle className="h-3.5 w-3.5" />
-                  Not configured
+                  Unavailable
                 </Badge>
                 <span className="text-sm text-slate-600">
-                  Set{' '}
-                  <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-800">
-                    ANTHROPIC_API_KEY
-                  </code>{' '}
-                  in your Render dashboard to turn on wording help. Drafting from findings and
-                  sending still work without it.
+                  Wording help is off right now. Drafting from measured findings and sending
+                  both work without it — every draft is written from what Qualify measured
+                  either way.
                 </span>
               </div>
             )}
