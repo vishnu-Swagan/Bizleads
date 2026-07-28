@@ -96,6 +96,24 @@ class TestEntitlements:
         take the customer's money and grant them nothing."""
         assert stripe_webhook.PLAN_ENTITLEMENTS[plan] == {"credits": credits, "seats": seats}
 
+    def test_revenuecat_package_identifier_selects_the_right_plan(self):
+        plan = stripe_webhook._plan_from_event(
+            {},
+            {"app_user_id": "user-123", "package_id": "agency_monthly"},
+        )
+
+        assert plan == "agency"
+
+    def test_imported_stripe_price_selects_the_right_plan(self, monkeypatch):
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_monthly")
+        subscription = {
+            "items": {
+                "data": [{"price": {"id": "price_pro_monthly", "metadata": {}}}]
+            }
+        }
+
+        assert stripe_webhook._plan_from_event(subscription, {}) == "pro"
+
 
 class TestEventCoverage:
     @pytest.mark.parametrize("event", [

@@ -40,6 +40,26 @@ PLANS = {
     "agency": {"name": "Agency", "price": 19900, "credits": 5000, "seats": 10},
 }
 
+STRIPE_PRICE_ENV = {
+    ("solo", False): "STRIPE_PRICE_SOLO_MONTHLY",
+    ("pro", False): "STRIPE_PRICE_PRO_MONTHLY",
+    ("agency", False): "STRIPE_PRICE_AGENCY_MONTHLY",
+}
+
+
+def _configured_price_id(plan: str, annual: bool) -> str:
+    """Return the stable Stripe Price used by Stripe and RevenueCat.
+
+    RevenueCat imports Stripe products by their persistent Product/Price IDs.
+    Creating ``price_data`` inline for every checkout creates a new catalog
+    item every time, which cannot be managed as one RevenueCat product.
+
+    The fallback keeps existing deployments usable while the catalog is being
+    configured. Production should set all three monthly STRIPE_PRICE_* variables.
+    """
+    env_name = STRIPE_PRICE_ENV.get((plan, annual))
+    return os.environ.get(env_name, "").strip() if env_name else ""
+
 
 class CreateCheckoutRequest(BaseModel):
     plan: str
@@ -84,7 +104,6 @@ async def get_plans():
                 "id": "solo",
                 "name": "Solo",
                 "price_monthly": 29,
-                "price_annual": 290,
                 "credits": 300,
                 "features": [
                     "300 monthly discovery credits",
@@ -98,7 +117,6 @@ async def get_plans():
                 "id": "pro",
                 "name": "Pro",
                 "price_monthly": 79,
-                "price_annual": 790,
                 "credits": 1500,
                 "features": [
                     "1,500 monthly discovery credits",
@@ -112,7 +130,6 @@ async def get_plans():
                 "id": "agency",
                 "name": "Agency",
                 "price_monthly": 199,
-                "price_annual": 1990,
                 "credits": 5000,
                 "features": [
                     "5,000 monthly discovery credits",
@@ -174,6 +191,11 @@ async def create_checkout(
 
     if data.plan not in ["solo", "pro", "agency"]:
         raise HTTPException(status_code=400, detail="Invalid plan selected")
+    if data.annual:
+        raise HTTPException(
+            status_code=400,
+            detail="Annual billing is not available for BizLeads",
+        )
 
     plan = PLANS[data.plan]
 
@@ -194,53 +216,59 @@ async def create_checkout(
         separator = "&" if "?" in success_url else "?"
         success_url = f"{success_url}{separator}session_id={{CHECKOUT_SESSION_ID}}"
 
-    # Calculate price - server-side authoritative pricing
-    unit_amount = plan["price"]
-    interval = "month"
-    if data.annual:
-        unit_amount = int(plan["price"] * 10)  # 2 months free
-        interval = "year"
-
     try:
-        # Build session kwargs - omit customer_email if empty/None
-        session_kwargs = {
-            "payment_method_types": ["card"],
-            "line_items": [{
+        # The same non-guessable Supabase UUID identifies this customer in
+        # BizLeads, Stripe metadata, and RevenueCat. RevenueCat's automatic
+        # Stripe purchase tracking reads `app_user_id` from both the Checkout
+        # Session and Subscription, so both copies are intentional.
+        purchase_metadata = {
+            "user_id": current_user.id,
+            "app_user_id": current_user.id,
+            "plan": data.plan,
+            "annual": str(data.annual).lower(),
+        }
+
+        price_id = _configured_price_id(data.plan, data.annual)
+        if price_id:
+            line_items = [{"price": price_id, "quantity": 1}]
+        else:
+            # Migration fallback only. RevenueCat cannot reliably import these
+            # one-checkout-only catalog items; production should use the stable
+            # STRIPE_PRICE_* values above.
+            unit_amount = plan["price"]
+            interval = "month"
+            logger.warning(
+                "%s is unset; creating inline Stripe price data for %s (%s)",
+                STRIPE_PRICE_ENV[(data.plan, data.annual)],
+                data.plan,
+                interval,
+            )
+            line_items = [{
                 "price_data": {
-                    # All plans are billed in USD; non-US customers are charged in USD
-                    # at their card network's exchange rate (disclosed on the Pricing
-                    # page). Stripe Tax (automatic_tax={"enabled": True}) is NOT enabled
-                    # here: it requires Stripe Tax to be configured in the Dashboard
-                    # (origin address, tax registrations, product tax codes) first.
-                    # Enabling it without that configuration would error out or silently
-                    # miscalculate tax on every checkout. To turn this on: configure
-                    # Stripe Tax in the Dashboard for Torque Trends LLC (Kentucky, US),
-                    # then set automatic_tax={"enabled": True} on the session and add
-                    # customer_update={"address": "auto"} / collect billing address so
-                    # Stripe can determine the customer's tax jurisdiction.
+                    # All plans are billed in USD; non-US customers are charged
+                    # in USD at their card network's exchange rate.
                     "currency": "usd",
                     "product_data": {
                         "name": f"BizLeads {plan['name']} Plan",
-                        # Credits only. This string is rendered on Stripe's own
-                        # checkout page, which is the last thing a customer
-                        # reads before paying — the seat count that used to be
-                        # here was the most exposed statement of an
-                        # entitlement nothing enforces or offers.
                         "description": f"{plan['credits']} monthly credits",
+                        "metadata": {"bizleads_plan": data.plan},
                     },
                     "unit_amount": unit_amount,
                     "recurring": {"interval": interval},
                 },
                 "quantity": 1,
-            }],
+            }]
+
+        # Build session kwargs - omit customer_email if empty/None
+        session_kwargs = {
+            "payment_method_types": ["card"],
+            "line_items": line_items,
             "mode": "subscription",
             "success_url": success_url,
             "cancel_url": cancel_url,
-            "metadata": {
-                "user_id": current_user.id,
-                "plan": data.plan,
-                "annual": str(data.annual),
-            },
+            "client_reference_id": current_user.id,
+            "metadata": purchase_metadata,
+            "subscription_data": {"metadata": purchase_metadata},
         }
 
         # Only include customer_email if it's a non-empty valid string

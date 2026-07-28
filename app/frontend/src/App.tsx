@@ -66,6 +66,7 @@ const AppRoutes = () => (
     <Route path="/app/analytics" element={<AppAnalytics />} />
     <Route path="/app/automations" element={<AppAutomations />} />
     <Route path="/app/settings/*" element={<AppSettings />} />
+    <Route path="/app/billing" element={<Navigate to="/app/settings/billing" replace />} />
 
     {/* Redirects from old routes */}
     <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace />} />

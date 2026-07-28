@@ -139,6 +139,84 @@ The webhook now exists (`routers/stripe_webhook.py`, mounted at `/api/v1/payment
 
 Start with `sk_test_` keys and Stripe's test-mode webhook until a full subscribe → renew → cancel cycle behaves.
 
+### RevenueCat web subscriptions (Stripe Billing)
+
+BizLeads uses **Stripe Billing connected to RevenueCat**, not RevenueCat
+Billing. Stripe remains the billing engine and customer portal; RevenueCat
+provides the hosted paywall, customer/subscription analytics, targeting, and
+experiments.
+
+Do not choose RevenueCat Billing for this deployment. RevenueCat documents
+that its own billing engine cannot currently be used in India and other
+countries that require collection of the customer's name or address. The
+Stripe Billing integration has no such migration problem and preserves the
+existing signed Stripe webhook.
+
+1. In Stripe, create exactly one monthly recurring Price per product:
+
+   | RevenueCat package ID | Stripe product | Amount |
+   |---|---|---:|
+   | `solo_monthly` | BizLeads Solo | $29/month |
+   | `pro_monthly` | BizLeads Pro | $79/month |
+   | `agency_monthly` | BizLeads Agency | $199/month |
+
+   Add Product metadata `bizleads_plan=solo`, `pro`, or `agency`. Copy the
+   three `price_...` IDs into the matching `STRIPE_PRICE_*` Render variables.
+   Stable IDs are required: the legacy inline `price_data` fallback creates
+   disposable catalog objects that RevenueCat cannot manage as one product.
+
+2. Install the RevenueCat app in the **Torque Trends LLC** Stripe account.
+   RevenueCat → Web → add a **Stripe Billing** config for that account.
+
+3. In the config's purchase-tracking settings:
+
+   - enable tracking new purchases from Stripe server notifications;
+   - choose **Register after the invoice is paid**;
+   - choose **Read App User ID from metadata**;
+   - set the metadata field key to exactly `app_user_id`.
+
+   The backend writes the authenticated Supabase UUID to both Checkout Session
+   metadata and `subscription_data.metadata`. Do not use email as the App User
+   ID.
+
+4. Import the three monthly Stripe products. Create one entitlement named
+   `paid_access` and attach all three products. Create the current offering and add packages
+   using the exact IDs from the table above.
+
+5. Create a Web Purchase Link for that offering:
+
+   - use the RevenueCat paywall/package-selection page;
+   - set Terms to `https://bizleads-five.vercel.app/terms`;
+   - set Privacy to `https://bizleads-five.vercel.app/privacy`;
+   - redirect successful purchases to
+     `https://bizleads-five.vercel.app/app/settings/billing`;
+   - returning subscribers should see the success page, not buy the same
+     subscription twice.
+
+6. Copy the **production** link base
+   (`https://pay.rev.cat/<production-token>`, with no App User ID) to the
+   Vercel Production variable `VITE_REVENUECAT_PURCHASE_LINK`. Never put the
+   sandbox link in Production. Redeploy the frontend after changing it.
+
+   BizLeads appends the signed-in UUID as a path segment and preselects the
+   package with `package_id`. If this variable is absent, upgrade buttons use
+   the existing direct Stripe Checkout fallback.
+
+7. Test in sandbox first:
+
+   - Solo monthly activates 300 credits;
+   - Pro monthly activates 1,500 credits;
+   - Agency monthly activates 5,000 credits;
+   - renewal resets used credits;
+   - failed payment becomes `past_due`;
+   - cancellation becomes `canceled`;
+   - the RevenueCat customer is the same UUID shown in BizLeads auth/Stripe
+     metadata.
+
+Production is ready only after the RevenueCat production link, three live Stripe
+Price IDs, live Stripe webhook secret, and live Stripe secret key are all set.
+Do not mix sandbox and live values.
+
 ---
 
 ## Email sending

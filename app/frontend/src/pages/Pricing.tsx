@@ -19,7 +19,6 @@ const plans = [
     id: 'solo',
     name: 'Solo',
     price: 29,
-    annual: 290,
     description: 'For freelance web designers getting started',
     credits: '300',
     features: [
@@ -35,7 +34,6 @@ const plans = [
     id: 'pro',
     name: 'Pro',
     price: 79,
-    annual: 790,
     description: 'For studios running outreach at a steady clip',
     credits: '1,500',
     features: [
@@ -51,7 +49,6 @@ const plans = [
     id: 'agency',
     name: 'Agency',
     price: 199,
-    annual: 1990,
     description: 'For agencies prospecting across many markets',
     credits: '5,000',
     features: [
@@ -139,9 +136,6 @@ export default function Pricing() {
                   <span className="text-4xl font-bold text-slate-900">${plan.price}</span>
                   <span className="text-slate-500 ml-1">USD</span>
                   <span className="text-slate-500">/month</span>
-                  <p className="text-xs text-slate-500 mt-1">
-                    or ${plan.annual} USD/year (save ~17%)
-                  </p>
                 </div>
                 <div className="flex-1 mb-6">
                   <div className="flex items-center gap-2 mb-3 text-sm font-medium text-slate-700">

@@ -53,6 +53,12 @@ HANDLED_EVENTS = {
     "invoice.payment_failed",
 }
 
+PRICE_ENV_TO_PLAN = {
+    "STRIPE_PRICE_SOLO_MONTHLY": "solo",
+    "STRIPE_PRICE_PRO_MONTHLY": "pro",
+    "STRIPE_PRICE_AGENCY_MONTHLY": "agency",
+}
+
 
 def _verify(payload: bytes, signature: str | None):
     """Verify the Stripe signature, or refuse the request."""
@@ -94,6 +100,54 @@ async def _workspace_for(db: AsyncSession, *, customer_id: str | None,
         workspace = result.scalar_one_or_none()
         if workspace:
             return workspace
+    return None
+
+
+def _plan_from_event(obj: dict, metadata: dict) -> str | None:
+    """Resolve the BizLeads plan from direct or RevenueCat Stripe events.
+
+    Direct BizLeads Checkout puts ``plan`` in Subscription metadata.
+    RevenueCat-hosted checkout may instead deliver only a package identifier
+    plus the stable Stripe Price in the Subscription's line items, so those
+    paths are supported too.
+    """
+    for key in ("plan", "bizleads_plan"):
+        candidate = metadata.get(key)
+        if candidate in PLAN_ENTITLEMENTS and candidate != "trial":
+            return candidate
+
+    for key in ("package_id", "rc_package", "rc_package_id"):
+        package_id = str(metadata.get(key) or "").lower()
+        for plan in ("solo", "pro", "agency"):
+            if package_id == plan or package_id.startswith(f"{plan}_"):
+                return plan
+
+    configured_prices = {
+        os.environ.get(env_name, "").strip(): plan
+        for env_name, plan in PRICE_ENV_TO_PLAN.items()
+        if os.environ.get(env_name, "").strip()
+    }
+    items = ((obj.get("items") or {}).get("data") or [])
+    for item in items:
+        price = item.get("price") or {}
+        price_metadata = price.get("metadata") or {}
+        candidate = price_metadata.get("bizleads_plan") or price_metadata.get("plan")
+        if candidate in PLAN_ENTITLEMENTS and candidate != "trial":
+            return candidate
+        price_id = price.get("id")
+        if price_id in configured_prices:
+            return configured_prices[price_id]
+
+        product = price.get("product")
+        if isinstance(product, dict):
+            product_metadata = product.get("metadata") or {}
+            candidate = (
+                product_metadata.get("bizleads_plan")
+                or product_metadata.get("plan")
+            )
+            if candidate in PLAN_ENTITLEMENTS and candidate != "trial":
+                return candidate
+
     return None
 
 
@@ -146,7 +200,11 @@ async def stripe_webhook(
         db,
         customer_id=customer_id,
         subscription_id=subscription_id,
-        owner_id=metadata.get("user_id") or metadata.get("owner_id"),
+        owner_id=(
+            metadata.get("user_id")
+            or metadata.get("owner_id")
+            or metadata.get("app_user_id")
+        ),
     )
     if workspace is None:
         # 200, not 404: retrying will not conjure a workspace, and a failing
@@ -158,9 +216,22 @@ async def stripe_webhook(
     if event_type in ("checkout.session.completed", "customer.subscription.created"):
         if event_type == "checkout.session.completed" and obj.get("payment_status") != "paid":
             return {"received": True, "handled": False, "reason": "not_paid"}
-        plan = metadata.get("plan") or workspace.plan or "solo"
-        _apply_plan(workspace, plan)
-        workspace.subscription_status = "active"
+        plan = _plan_from_event(obj, metadata)
+        if plan:
+            _apply_plan(workspace, plan)
+            workspace.subscription_status = "active"
+        elif workspace.plan and workspace.plan != "trial":
+            # A repeat lifecycle event without product data may safely retain
+            # an already-known paid plan. Never guess "solo" for a new payer:
+            # that would under-grant Pro/Agency purchases.
+            workspace.subscription_status = "active"
+        else:
+            logger.warning(
+                "Paid %s for workspace %s had no resolvable plan; waiting for "
+                "the Subscription event with Stripe Price data",
+                event_type,
+                workspace.id,
+            )
         if customer_id:
             workspace.stripe_customer_id = customer_id
         if subscription_id:
@@ -169,7 +240,7 @@ async def stripe_webhook(
     elif event_type == "customer.subscription.updated":
         status = obj.get("status", "")
         workspace.subscription_status = status
-        plan = metadata.get("plan")
+        plan = _plan_from_event(obj, metadata)
         if plan and plan != workspace.plan:
             _apply_plan(workspace, plan)
         # cancel_at_period_end leaves status "active" until the period ends,

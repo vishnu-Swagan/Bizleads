@@ -145,6 +145,14 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      # Stable monthly Prices shared by direct Stripe Checkout and RevenueCat's
+      # imported product catalog. Set all three; see DEPLOY.md.
+      - key: STRIPE_PRICE_SOLO_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_PRO_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_AGENCY_MONTHLY
+        sync: false
 
       # --- Customer email credentials ---
       # Each customer stores their OWN sending credentials, so nothing can be
