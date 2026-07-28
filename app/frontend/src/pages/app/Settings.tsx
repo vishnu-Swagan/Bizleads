@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import AppShell from '@/components/AppShell';
@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { client } from '@/lib/api';
+import { revenueCatPurchaseUrl } from '@/lib/revenuecat';
 import {
   CreditCard, Settings as SettingsIcon, Users, CheckCircle2, ArrowRight, Loader2,
   Mail, XCircle, AlertTriangle, ExternalLink, Send, ShieldAlert, Trash2,
@@ -77,6 +78,7 @@ export default function AppSettings() {
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const revenueCatReturnHandled = useRef(false);
 
   // Email delivery — see EmailSettingsData above for why secrets are booleans.
   const [emailData, setEmailData] = useState<EmailSettingsData | null>(null);
@@ -111,6 +113,19 @@ export default function AppSettings() {
       verifyPayment(sessionId);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const appUserId = searchParams.get('app_user_id');
+    if (
+      user &&
+      appUserId === user.id &&
+      !revenueCatReturnHandled.current
+    ) {
+      revenueCatReturnHandled.current = true;
+      toast.success('Purchase complete. Your subscription is syncing now.');
+      void fetchUsage();
+    }
+  }, [searchParams, user]);
 
   const fetchUsage = async () => {
     try {
@@ -262,15 +277,28 @@ export default function AppSettings() {
     }
   };
 
-  const handleUpgrade = async (plan: string, annual: boolean = false) => {
+  const handleUpgrade = async (plan: string) => {
     setUpgrading(plan);
     try {
+      const hostedPurchaseUrl = user
+        ? revenueCatPurchaseUrl({
+            userId: user.id,
+            email: user.email,
+            plan,
+          })
+        : null;
+
+      if (hostedPurchaseUrl) {
+        client.utils.openUrl(hostedPurchaseUrl);
+        return;
+      }
+
       const res = await client.apiCall.invoke({
         url: '/api/v1/billing/create-checkout',
         method: 'POST',
         data: {
           plan,
-          annual,
+          annual: false,
           success_url: window.location.origin + '/app/settings/billing',
           cancel_url: window.location.origin + '/pricing',
         },

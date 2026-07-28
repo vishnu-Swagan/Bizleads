@@ -73,6 +73,19 @@ async def test_usage_does_not_create_second_workspace_on_repeat_call(user_a_clie
     assert len(workspaces) == 1, "repeat call to /billing/usage created a duplicate workspace"
 
 
+def test_stable_price_id_is_selected_for_revenuecat(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_monthly")
+
+    assert payments._configured_price_id("pro", False) == "price_pro_monthly"
+    assert payments._configured_price_id("pro", True) == ""
+
+
+async def test_public_plan_catalog_is_monthly_only():
+    catalog = await payments.get_plans()
+
+    assert all("price_annual" not in plan for plan in catalog["plans"])
+
+
 async def test_foreign_session_is_rejected(user_a_client, db_session, monkeypatch):
     await _seed_workspace(db_session)
     monkeypatch.setattr(
