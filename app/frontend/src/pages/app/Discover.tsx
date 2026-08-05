@@ -31,9 +31,10 @@ interface BusinessResult {
   location: string;
   country: string;
   website_url: string;
-  // Null until Qualify measures the site. Pass 1 never knows these, and
-  // `has_website` is null — not false — when the provider simply has no
-  // website on record. Typing them as non-nullable let code like
+  // Null when the site could not be read at all — unreachable, blocked or
+  // parked. Discovery measures every result, so this is now the exception
+  // rather than the norm, but `has_website` is still null — not false — when
+  // nothing could be established. Typing these as non-nullable let code like
   // `biz.website_score > 50` compile while silently reading unknown as zero,
   // which is the one claim this product must never make.
   website_score: number | null;
@@ -59,6 +60,20 @@ interface BusinessResult {
   top_opportunity: string;
   timing_signal: string;
   data_source?: string;
+  /**
+   * Measured at discovery, from the business's own page.
+   *
+   * `findings` is the sellable part — specific, checkable problems with the
+   * site. Null when nothing could be read, which is not the same as an empty
+   * list ("read it, found nothing wrong").
+   */
+  findings?: Array<Record<string, unknown>> | null;
+  /** ISO timestamp; present only where a website score was established. */
+  qualified_at?: string;
+  /** Social platforms the site links to. Null when no page could be read. */
+  social_platforms?: string[] | null;
+  /** Which tier produced the score: heuristic, lighthouse or pagespeed. */
+  evidence_tier?: string | null;
 }
 
 interface Filters {
@@ -219,12 +234,16 @@ export default function AppDiscover() {
     location: biz.location,
     country: biz.country,
     website_url: biz.website_url || '',
-    // Null stays null. These are unknown until Qualify measures them, and
-    // coercing to 0/false here would claim a verdict nobody has established.
+    // Null stays null. Discovery measures every result, but a site that is
+    // unreachable, blocked or parked still yields no score, and coercing that
+    // to 0/false would claim a verdict nobody has established.
     website_score: biz.website_score,
     social_score: biz.social_score,
     has_website: biz.has_website,
-    social_platforms: '[]',
+    // Measured from the links on the business's own page. Falls back to '[]'
+    // only when no page could be read — an empty list means "looked, found
+    // none", which is a different claim from "never looked".
+    social_platforms: JSON.stringify(biz.social_platforms ?? []),
     contact_email: biz.contact_email || '',
     contact_phone: biz.contact_phone || '',
     // The provider has returned this on every POI all along; there was simply
@@ -236,6 +255,14 @@ export default function AppDiscover() {
     notes_count: 0,
     last_contacted: '',
     data_source: biz.data_source || 'provider',
+    // The measurement discovery already performed. Without these two the save
+    // would throw away the findings the user paid for and the lead would land
+    // in the pipeline looking as though it had never been checked.
+    //
+    // The backend sets qualified_at only where a score was established, so
+    // undefined here means genuinely unmeasured rather than measured-and-clean.
+    findings: biz.findings ? JSON.stringify(biz.findings) : undefined,
+    qualified_at: biz.qualified_at || undefined,
   });
 
   const saveAsLead = async (biz: BusinessResult, index: number) => {

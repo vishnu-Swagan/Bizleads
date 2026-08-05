@@ -10,8 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { client } from '@/lib/api';
-import { useCredits } from '@/contexts/CreditsContext';
-import { Search, Download, ChevronRight, AlertCircle, Gauge, Loader2 } from 'lucide-react';
+import { buildLeadsCsv } from '@/lib/leadsCsv';
+import { Search, Download, ChevronRight, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -21,8 +21,8 @@ interface Lead {
   category: string;
   location: string;
   country: string;
-  // Null means nobody has measured this lead yet — distinct from a measured
-  // zero, and from has_website: false, which is a verdict Qualify reached.
+  // Null means the site could not be read — distinct from a measured zero,
+  // and from has_website: false, which is a verdict the measurement reached.
   // The rendering below already keeps the three states apart; these types
   // now say so, instead of describing a payload the API never sends.
   website_score: number | null;
@@ -33,6 +33,18 @@ interface Lead {
   contact_email: string;
   created_at: string;
   data_source?: string | null;
+  // Measured at discovery and carried into the export. Everything below was
+  // already stored on the lead and simply never left the app.
+  contact_phone?: string | null;
+  website_url?: string | null;
+  address?: string | null;
+  /** JSON-encoded findings. Null when the site could not be read. */
+  findings?: string | null;
+  qualified_at?: string | null;
+  social_platforms?: string | null;
+  notes_count?: number | null;
+  last_contacted?: string | null;
+  updated_at?: string | null;
 }
 
 const stageLabels: Record<string, string> = {
@@ -84,6 +96,7 @@ export function getDataSourceBadge(source?: string | null) {
   return (source && dataSourceBadge[source]) || unverifiedBadge;
 }
 
+
 export default function AppLeads() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -92,72 +105,7 @@ export default function AppLeads() {
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
-  const [qualifying, setQualifying] = useState<Set<number>>(new Set());
-  const { refresh: refreshCredits } = useCredits();
-
-  /** A lead whose web presence has never been measured. */
-  const isUnmeasured = (l: Lead) => l.website_score === null && l.has_website === null;
-
-  /**
-   * Pass 2. Measures the site behind each lead and ranks it.
-   *
-   * Costs one credit per lead because it does real work — a DNS lookup, an
-   * HTTP fetch, and optionally a Lighthouse audit. The endpoint caps a batch
-   * at 10, so the bulk action is chunked rather than sent as one large call.
-   */
-  const qualify = async (ids: number[]) => {
-    if (!ids.length) return;
-    setQualifying((prev) => new Set([...prev, ...ids]));
-
-    try {
-      const batches: number[][] = [];
-      for (let i = 0; i < ids.length; i += 10) batches.push(ids.slice(i, i + 10));
-
-      let measured = 0;
-      let topFinding: string | null = null;
-
-      for (const batch of batches) {
-        const res = await client.apiCall.invoke({
-          url: '/api/v1/discover/qualify',
-          method: 'POST',
-          data: { lead_ids: batch },
-          options: { timeout: 120000 },
-        });
-        const qualified = res.data?.qualified ?? [];
-        measured += qualified.length;
-        for (const q of qualified) {
-          if (!topFinding && q.findings?.length) {
-            topFinding = `${q.business_name}: ${q.findings[0].label}`;
-          }
-        }
-      }
-
-      await fetchLeads();
-      // Qualify charges per lead measured, so the header balance is stale the
-      // moment this returns. Refreshing here is what makes the spend visible
-      // at all — it was always deducted, just never shown.
-      await refreshCredits();
-      toast.success(
-        `Measured ${measured} lead${measured === 1 ? '' : 's'}` +
-          (topFinding ? ` · ${topFinding}` : '') +
-          ` · ${measured} credit${measured === 1 ? '' : 's'} used`,
-      );
-    } catch (err: any) {
-      const detail = err?.data?.detail;
-      if (detail?.error === 'insufficient_credits') {
-        toast.error(detail.message);
-      } else {
-        toast.error(detail?.message ?? err?.message ?? 'Qualification failed');
-      }
-    } finally {
-      setQualifying((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id) => next.delete(id));
-        return next;
-      });
-    }
-  };
-
+  const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (user) fetchLeads();
   }, [user]);
@@ -173,24 +121,80 @@ export default function AppLeads() {
     }
   };
 
-  const filtered = leads.filter((l) => {
+  const matchesFilters = (l: Lead) => {
     if (searchQuery && !l.business_name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (stageFilter !== 'all' && l.pipeline_stage !== stageFilter) return false;
     if (priorityFilter !== 'all' && l.priority !== priorityFilter) return false;
     return true;
-  });
+  };
 
-  const exportCSV = () => {
-    const headers = ['Business Name', 'Category', 'Location', 'Country', 'Stage', 'Priority', 'Email'];
-    const rows = filtered.map(l => [l.business_name, l.category, l.location, l.country, l.pipeline_stage, l.priority, l.contact_email]);
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+  const filtered = leads.filter(matchesFilters);
+
+  /**
+   * Every lead the account holds, not just the page already on screen.
+   *
+   * The table loads 200 for responsiveness, which silently truncated the
+   * export: a workspace with 300 leads exported 200 and said nothing. The
+   * list endpoint reports `total` and caps a page at 2000, so this walks the
+   * pages until it has them all.
+   */
+  const fetchAllLeads = async (): Promise<Lead[]> => {
+    const pageSize = 2000;
+    const all: Lead[] = [];
+
+    for (let skip = 0; ; skip += pageSize) {
+      const res = await client.entities.leads.query({
+        query: {},
+        sort: '-created_at',
+        limit: pageSize,
+        skip,
+      });
+      const items: Lead[] = res.data?.items || [];
+      all.push(...items);
+
+      // Stop on a short page as well as on the reported total: if `total`
+      // were ever absent or wrong, trusting it alone would loop forever.
+      const total = res.data?.total ?? all.length;
+      if (items.length < pageSize || all.length >= total) break;
+    }
+
+    return all;
+  };
+
+  const exportCSV = async () => {
+    if (exporting) return;
+    setExporting(true);
+    let rows: Lead[];
+    try {
+      rows = (await fetchAllLeads()).filter(matchesFilters);
+    } catch (err) {
+      console.error('Failed to load leads for export:', err);
+      toast.error('Could not load your leads to export. Please try again.');
+      setExporting(false);
+      return;
+    }
+
+    if (!rows.length) {
+      toast.info('No leads match the current filters.');
+      setExporting(false);
+      return;
+    }
+
+    const csv = buildLeadsCsv(rows);
+    // ﻿ is a UTF-8 byte-order mark. Excel assumes the system codepage
+    // without it and mangles every non-ASCII business name — "Café" becomes
+    // "CafÃ©" — which is exactly the kind of name this product surfaces.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'bizleads-export.csv';
     a.click();
-    toast.success('Exported to CSV');
+    // Chrome aborts an in-flight download when the object URL is revoked
+    // immediately, so this releases it after the click has been handled.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    toast.success(`Exported ${rows.length} lead${rows.length === 1 ? '' : 's'} to CSV`);
+    setExporting(false);
   };
 
   return (
@@ -201,26 +205,16 @@ export default function AppLeads() {
             <h1 className="text-2xl font-bold text-slate-900">Leads</h1>
             <p className="text-sm text-slate-500">{leads.length} total leads in your workspace</p>
           </div>
-          {leads.filter(isUnmeasured).length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={qualifying.size > 0}
-              onClick={() => qualify(leads.filter(isUnmeasured).map((l) => l.id))}
-              className="gap-2 border-indigo-200 text-indigo-700 cursor-pointer"
-              title="Measure every lead that has never been checked (1 credit each)"
-            >
-              {qualifying.size > 0 ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Gauge className="h-4 w-4" />
-              )}
-              Qualify {leads.filter(isUnmeasured).length} unmeasured
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={exportCSV} className="gap-2 border-slate-200">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportCSV}
+            disabled={exporting}
+            className="gap-2 border-slate-200"
+            title="Download every lead, with all measured contact details and findings"
+          >
             <Download className="h-4 w-4" />
-            Export CSV
+            {exporting ? 'Exporting…' : 'Export CSV'}
           </Button>
         </div>
 
@@ -334,24 +328,17 @@ export default function AppLeads() {
                       ) : lead.has_website === false ? (
                         <span className="text-slate-700">No website</span>
                       ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={qualifying.has(lead.id)}
-                          className="h-7 border-slate-200 text-xs cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            qualify([lead.id]);
-                          }}
-                          title="Fetch the site and measure its quality (1 credit)"
+                        // Discovery measures every lead it returns, so this is
+                        // no longer "not measured yet" but "could not be
+                        // measured" — unreachable, blocked or parked. There is
+                        // no button because there is nothing the user can do
+                        // about it; re-running would fetch the same dead host.
+                        <span
+                          className="text-slate-400"
+                          title="The site could not be read — unreachable, blocked or parked."
                         >
-                          {qualifying.has(lead.id) ? (
-                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                          ) : (
-                            <Gauge className="h-3 w-3 mr-1" />
-                          )}
-                          {qualifying.has(lead.id) ? 'Measuring…' : 'Qualify'}
-                        </Button>
+                          Not measurable
+                        </span>
                       )}
                     </TableCell>
                     <TableCell>
