@@ -399,6 +399,19 @@ async def deduct_credit(
     if not workspace:
         raise HTTPException(status_code=404, detail="No workspace found")
 
+    # The last credit path that ignored the exemption. Discover and Qualify
+    # have consulted it since it was introduced; this one did not, so an
+    # unmetered account was still refused here at a zero balance. Nothing in
+    # the frontend calls this endpoint today, which is why it went unnoticed —
+    # but an exemption with a hole in it is worse than no exemption, because
+    # it holds right up until the one path that forgot about it.
+    if has_unlimited_credits(current_user.email):
+        return {
+            "credits_remaining": None,
+            "credits_used": workspace.credits_used,
+            "unlimited_credits": True,
+        }
+
     remaining = workspace.monthly_credits - workspace.credits_used
     if remaining <= 0:
         raise HTTPException(
@@ -412,4 +425,5 @@ async def deduct_credit(
     return {
         "credits_remaining": workspace.monthly_credits - workspace.credits_used,
         "credits_used": workspace.credits_used,
+        "unlimited_credits": False,
     }

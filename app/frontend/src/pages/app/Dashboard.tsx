@@ -20,6 +20,13 @@ interface UsageData {
   credits_remaining: number;
   subscription_status: string;
   trial_ends_at: string;
+  /**
+   * This account is never metered, so every number derived from a credit
+   * balance is meaningless for it. Computed server-side in
+   * routers/payments.py — the client must not try to work it out from the
+   * plan, or it will disagree with what the API actually enforces.
+   */
+  unlimited_credits?: boolean;
 }
 
 interface LeadStats {
@@ -84,8 +91,12 @@ export default function AppDashboard() {
           </div>
         ) : (
           <>
-            {/* Plan status banner */}
-            {usage?.subscription_status === 'trialing' && (
+            {/* Plan status banner.
+                Suppressed for unmetered accounts: telling someone whose
+                account is never charged that their trial is running low, and
+                offering to sell them capacity they already have without
+                limit, is straightforwardly false. */}
+            {usage?.subscription_status === 'trialing' && !usage?.unlimited_credits && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <Clock className="h-5 w-5 text-amber-600" />
@@ -109,21 +120,32 @@ export default function AppDashboard() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Credits</p>
-                      <p className="text-2xl font-bold text-slate-900 mt-1">
-                        {usage?.credits_remaining ?? 0}
-                        <span className="text-sm font-normal text-slate-400">/{usage?.credits_total ?? 0}</span>
-                      </p>
+                      {/* A static "25/25" with a bar that never moves reads as
+                          a broken counter — the same confusion an invisible
+                          balance caused before it was shown at all. */}
+                      {usage?.unlimited_credits ? (
+                        <p className="text-2xl font-bold text-slate-900 mt-1">Unlimited</p>
+                      ) : (
+                        <p className="text-2xl font-bold text-slate-900 mt-1">
+                          {usage?.credits_remaining ?? 0}
+                          <span className="text-sm font-normal text-slate-400">/{usage?.credits_total ?? 0}</span>
+                        </p>
+                      )}
                     </div>
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50">
                       <CreditCard className="h-5 w-5 text-indigo-600" />
                     </div>
                   </div>
-                  <div className="mt-3 h-1.5 rounded-full bg-slate-100">
-                    <div
-                      className="h-full rounded-full bg-indigo-600 transition-all"
-                      style={{ width: `${Math.min(100, ((usage?.credits_used ?? 0) / Math.max(1, usage?.credits_total ?? 1)) * 100)}%` }}
-                    />
-                  </div>
+                  {usage?.unlimited_credits ? (
+                    <p className="text-xs text-slate-500 mt-3">Not metered · searches never charge</p>
+                  ) : (
+                    <div className="mt-3 h-1.5 rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full bg-indigo-600 transition-all"
+                        style={{ width: `${Math.min(100, ((usage?.credits_used ?? 0) / Math.max(1, usage?.credits_total ?? 1)) * 100)}%` }}
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -166,14 +188,20 @@ export default function AppDashboard() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Plan</p>
-                      <p className="text-2xl font-bold text-slate-900 mt-1 capitalize">{usage?.plan_name ?? 'Trial'}</p>
+                      <p className="text-2xl font-bold text-slate-900 mt-1 capitalize">
+                        {usage?.unlimited_credits ? 'Internal' : (usage?.plan_name ?? 'Trial')}
+                      </p>
                     </div>
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-50">
                       <Zap className="h-5 w-5 text-purple-600" />
                     </div>
                   </div>
+                  {/* An unmetered account's stored plan is still "trial" and
+                      its status still "trialing" — the exemption bypasses
+                      metering rather than rewriting the workspace. Reporting
+                      that raw would show a permanent, meaningless countdown. */}
                   <Badge variant="secondary" className="mt-3 text-xs capitalize">
-                    {usage?.subscription_status ?? 'trialing'}
+                    {usage?.unlimited_credits ? 'unmetered' : (usage?.subscription_status ?? 'trialing')}
                   </Badge>
                 </CardContent>
               </Card>

@@ -38,6 +38,8 @@ interface UsageData {
   /** Computed server-side by the same function that enforces the block, so
    *  the UI and the API can never disagree about whether a trial has run out. */
   trial_expired: boolean;
+  /** Never metered. Every credit-derived number is meaningless for it. */
+  unlimited_credits?: boolean;
   credits_reset_at: string;
 }
 
@@ -732,19 +734,29 @@ export default function AppSettings() {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-lg font-bold text-slate-900 capitalize">{usage.plan_name}</p>
-                        <Badge variant="outline" className="text-xs capitalize mt-1">{usage.subscription_status}</Badge>
+                        <p className="text-lg font-bold text-slate-900 capitalize">
+                          {usage.unlimited_credits ? 'Internal' : usage.plan_name}
+                        </p>
+                        <Badge variant="outline" className="text-xs capitalize mt-1">
+                          {usage.unlimited_credits ? 'unmetered' : usage.subscription_status}
+                        </Badge>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm text-slate-600">
-                          {usage.credits_remaining} / {usage.credits_total} credits
-                        </p>
-                        <div className="w-32 h-1.5 rounded-full bg-slate-100 mt-1">
-                          <div
-                            className="h-full rounded-full bg-indigo-600"
-                            style={{ width: `${(usage.credits_used / Math.max(1, usage.credits_total)) * 100}%` }}
-                          />
-                        </div>
+                        {usage.unlimited_credits ? (
+                          <p className="text-sm text-slate-600">Unlimited credits</p>
+                        ) : (
+                          <>
+                            <p className="text-sm text-slate-600">
+                              {usage.credits_remaining} / {usage.credits_total} credits
+                            </p>
+                            <div className="w-32 h-1.5 rounded-full bg-slate-100 mt-1">
+                              <div
+                                className="h-full rounded-full bg-indigo-600"
+                                style={{ width: `${(usage.credits_used / Math.max(1, usage.credits_total)) * 100}%` }}
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                     {/* Two states, not one. This previously rendered "Trial
@@ -753,7 +765,7 @@ export default function AppSettings() {
                         already passed. `trial_expired` is computed by the same
                         server-side function that enforces the block, so this
                         cannot disagree with what Discover actually does. */}
-                    {usage.trial_expired ? (
+                    {usage.unlimited_credits ? null : usage.trial_expired ? (
                       <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
                         <p className="text-xs font-medium text-amber-900">
                           Trial ended
