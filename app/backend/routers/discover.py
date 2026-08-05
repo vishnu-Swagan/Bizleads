@@ -32,6 +32,7 @@ from services.discovery_provider import (
 from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
 from services.entitlements import has_unlimited_credits
+from services import activity
 from services.lead_angle import write_angle_note
 from services.leads import LeadsService
 from services import ai_writer
@@ -316,6 +317,35 @@ async def run_discovery(
             job.completed_at = datetime.utcnow().isoformat()
             await db.commit()
 
+        # How many results carried a usable address is the number worth
+        # watching: it is the difference between a search that produced leads
+        # and one that produced rows.
+        with_email = sum(1 for r in scored_results if (r.get("contact_email") or "").strip())
+        await activity.record(
+            db,
+            activity.SEARCH_RUN,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            workspace_id=workspace.id,
+            entity_type="search_job",
+            entity_id=job_id,
+            summary=(
+                f"Searched {data.category or 'all categories'} in "
+                f"{data.city or data.region or data.country or 'anywhere'} "
+                f"— {len(scored_results)} results, {with_email} with an email"
+            ),
+            metadata={
+                "results": len(scored_results),
+                "with_email": with_email,
+                "credits_charged": credit_cost,
+                "category": data.category,
+                "city": data.city,
+                "country": data.country,
+                "query": data.query,
+            },
+        )
+        await db.commit()
+
         return {
             "job_id": job_id,
             "status": "complete" if scored_results else "no_matches",
@@ -341,6 +371,19 @@ async def run_discovery(
         ws = ws_result.scalar_one_or_none()
         if ws:
             ws.credits_used = max(0, ws.credits_used - credit_cost)
+
+        await activity.record(
+            db,
+            activity.SEARCH_FAILED,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            workspace_id=workspace.id,
+            entity_type="search_job",
+            entity_id=job_id,
+            status="failed",
+            summary=f"Search failed: {str(e)[:200]}",
+            metadata={"error": str(e)[:1000], "category": data.category, "city": data.city},
+        )
 
         await db.commit()
 

@@ -191,6 +191,19 @@ services:
       - key: UNLIMITED_CREDIT_EMAILS
         sync: false
 
+      # --- Operators' console ---
+      # Comma-separated emails that may reach /admin, which reads across every
+      # tenant. Unset means NOBODY — the console then refuses everyone, which
+      # is the right default for anyone deploying this without knowing the
+      # variable exists.
+      #
+      # Deliberately a separate list from UNLIMITED_CREDIT_EMAILS above. That
+      # one grants a billing exemption and nothing more; sharing a list would
+      # silently turn "this account is not charged" into "this account can
+      # read every customer's data".
+      - key: ADMIN_EMAILS
+        sync: false
+
       # --- Safety rails ---
       # Must not be "dev": the exception handler returns full stack traces when
       # it is.

@@ -15,6 +15,7 @@ from models.workspaces import Workspaces
 from models.credit_ledger import Credit_ledger
 from dependencies.tenancy import ensure_workspace_for_user, trial_expired
 from services.entitlements import has_unlimited_credits
+from services.admin_access import is_admin_email
 
 import stripe
 
@@ -182,6 +183,15 @@ async def get_usage(
         # look like the counter had broken — the same confusion that made an
         # invisible balance look like credits were never charged.
         "unlimited_credits": unmetered,
+        # Whether this account may reach the operators' console.
+        #
+        # Reported by the server rather than derived in the client from the
+        # JWT role, because the allowlist route to admin leaves role="user" —
+        # a client deciding for itself would hide the console from exactly the
+        # people it was built for. It is only ever used to decide what to
+        # show: every admin route enforces this again server-side, so a
+        # client that lied to itself would gain nothing but a 403.
+        "is_admin": current_user.role == "admin" or is_admin_email(current_user.email),
     }
 
 

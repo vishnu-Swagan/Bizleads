@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from services.leads import LeadsService
+from services import activity
 from dependencies.auth import get_current_user
 from schemas.auth import UserResponse
 
@@ -212,6 +213,22 @@ async def create_leads(
             raise HTTPException(status_code=400, detail="Failed to create leads")
         
         logger.info(f"Leads created successfully with id: {result.id}")
+        await activity.record(
+            db,
+            activity.LEAD_SAVED,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            entity_type="lead",
+            entity_id=result.id,
+            summary=f"Saved lead {result.business_name}",
+            metadata={
+                "business_name": result.business_name,
+                "has_email": bool((result.contact_email or "").strip()),
+                "website_score": result.website_score,
+                "data_source": result.data_source,
+            },
+        )
+        await db.commit()
         return result
     except ValueError as e:
         logger.error(f"Validation error creating leads: {str(e)}")
@@ -240,6 +257,21 @@ async def create_leadss_batch(
                 results.append(result)
         
         logger.info(f"Batch created {len(results)} leadss successfully")
+        # One event for the batch, not one per lead. Saving 25 results is a
+        # single thing the user did, and 25 identical lines would bury every
+        # other action in the feed.
+        if results:
+            with_email = sum(1 for r in results if (r.contact_email or "").strip())
+            await activity.record(
+                db,
+                activity.LEAD_SAVED,
+                user_id=current_user.id,
+                user_email=current_user.email,
+                entity_type="lead",
+                summary=f"Saved {len(results)} leads ({with_email} with an email)",
+                metadata={"count": len(results), "with_email": with_email},
+            )
+            await db.commit()
         return results
     except Exception as e:
         await db.rollback()

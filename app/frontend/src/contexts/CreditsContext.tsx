@@ -29,6 +29,15 @@ interface Credits {
   trial_expired: boolean;
   /** Exempt from metering. The balance is then meaningless, not zero. */
   unlimited: boolean;
+  /**
+   * May reach the operators' console.
+   *
+   * Comes from the server, not from the JWT role: an operator admitted by
+   * the ADMIN_EMAILS allowlist still carries role="user", so deciding this
+   * client-side would hide the console from the people it exists for. Used
+   * only to choose what to render — every admin route re-checks server-side.
+   */
+  isAdmin: boolean;
 }
 
 interface CreditsContextValue {
@@ -56,6 +65,7 @@ export function CreditsProvider({ children }: { children: ReactNode }) {
         plan_name: res.data?.plan_name ?? '',
         trial_expired: res.data?.trial_expired === true,
         unlimited: res.data?.unlimited_credits === true,
+        isAdmin: res.data?.is_admin === true,
       });
     } catch {
       // Left null so the header renders nothing rather than a zero. Showing

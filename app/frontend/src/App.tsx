@@ -1,3 +1,4 @@
+import React from 'react';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -21,6 +22,14 @@ import AppPipeline from './pages/app/Pipeline';
 import AppAnalytics from './pages/app/Analytics';
 import AppAutomations from './pages/app/Automations';
 import AppSettings from './pages/app/Settings';
+import ProtectedAdminRoute from './components/ProtectedAdminRoute';
+import { CreditsProvider } from './contexts/CreditsContext';
+import AdminOverview from './pages/admin/Overview';
+import AdminActivity from './pages/admin/Activity';
+import AdminUsers from './pages/admin/Users';
+import AdminWorkspaces from './pages/admin/Workspaces';
+import AdminRevenue from './pages/admin/Revenue';
+import AdminHealth from './pages/admin/Health';
 
 const queryClient = new QueryClient();
 
@@ -37,6 +46,24 @@ const RedirectToLead = () => {
   const { id } = useParams();
   return <Navigate to={`/app/leads/${id}`} replace />;
 };
+
+/**
+ * Admin routes need their own CreditsProvider.
+ *
+ * The customer app mounts one inside AppShell, but the console renders
+ * AdminShell instead and ProtectedAdminRoute sits outside both. Without this,
+ * useCredits() falls back to the context default of `credits: null`, and the
+ * gate — which waits for the server's answer before deciding — would spin
+ * forever on a screen nobody could get past.
+ *
+ * The provider is only mounted on /admin/*, so it never runs alongside
+ * AppShell's copy and no page fetches the balance twice.
+ */
+const AdminRoute = ({ children }: { children: React.ReactNode }) => (
+  <CreditsProvider>
+    <ProtectedAdminRoute>{children}</ProtectedAdminRoute>
+  </CreditsProvider>
+);
 
 const AppRoutes = () => (
   <Routes>
@@ -67,6 +94,15 @@ const AppRoutes = () => (
     <Route path="/app/automations" element={<AppAutomations />} />
     <Route path="/app/settings/*" element={<AppSettings />} />
     <Route path="/app/billing" element={<Navigate to="/app/settings/billing" replace />} />
+
+    {/* Operators' console. Every one of these is also enforced server-side —
+        ProtectedAdminRoute decides what to render, never what is permitted. */}
+    <Route path="/admin" element={<AdminRoute><AdminOverview /></AdminRoute>} />
+    <Route path="/admin/activity" element={<AdminRoute><AdminActivity /></AdminRoute>} />
+    <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
+    <Route path="/admin/workspaces" element={<AdminRoute><AdminWorkspaces /></AdminRoute>} />
+    <Route path="/admin/revenue" element={<AdminRoute><AdminRevenue /></AdminRoute>} />
+    <Route path="/admin/health" element={<AdminRoute><AdminHealth /></AdminRoute>} />
 
     {/* Redirects from old routes */}
     <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace />} />

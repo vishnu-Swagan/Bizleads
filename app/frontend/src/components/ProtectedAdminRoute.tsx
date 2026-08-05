@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCredits } from '@/contexts/CreditsContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Shield, User, LogIn } from 'lucide-react';
@@ -12,11 +13,23 @@ interface ProtectedAdminRouteProps {
 const ProtectedAdminRoute: React.FC<ProtectedAdminRouteProps> = ({
   children,
 }) => {
-  const { user, loading, isAdmin, login } = useAuth();
+  const { user, loading, isAdmin: isAdminByRole, login } = useAuth();
+  const { credits } = useCredits();
   const location = useLocation();
 
+  // Two sources, either sufficient. useAuth reads role=admin off the token,
+  // which the original single-admin bootstrap produces. The server's answer
+  // additionally covers the ADMIN_EMAILS allowlist, where an operator still
+  // carries role="user" — checking only the role would lock out precisely the
+  // team this console was built for.
+  //
+  // `credits` is null until /billing/usage returns, so wait rather than
+  // rendering the refusal screen at somebody who is about to be admitted.
+  const isAdmin = isAdminByRole || credits?.isAdmin === true;
+  const stillResolving = credits === null && !isAdminByRole;
+
   // Loading state
-  if (loading) {
+  if (loading || stillResolving) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">

@@ -13,6 +13,7 @@ from core.supabase_auth import (
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from schemas.auth import UserResponse
+from services.admin_access import is_admin_email
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,22 @@ async def get_current_user(token: str = Depends(get_bearer_token)) -> UserRespon
 
 
 async def get_admin_user(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
-    """Dependency to ensure current user has admin role."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return current_user
+    """Ensure the caller is an operator.
+
+    Two routes in, because the original one does not scale past a single
+    person: role=admin on the verified token (set in Supabase app_metadata,
+    and what services/auth.py's single-admin bootstrap produces), or
+    membership of the ADMIN_EMAILS allowlist.
+
+    The refusal is logged with the address that was refused. An admin console
+    is the highest-value target in the application, and a 403 here is worth
+    knowing about — an unexplained one is either a misconfiguration locking
+    the team out, or somebody finding a URL they should not have.
+    """
+    if current_user.role == "admin" or is_admin_email(current_user.email):
+        return current_user
+
+    logger.warning(
+        "Refused admin access to %s (role=%s)", current_user.email or "unknown", current_user.role
+    )
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

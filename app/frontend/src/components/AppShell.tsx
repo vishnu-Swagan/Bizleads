@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/tooltip';
 import {
   Search, LayoutDashboard, LogOut, Menu, X, Target,
-  Kanban, List, BarChart3, Zap, Settings, CreditCard,
+  Kanban, List, BarChart3, Zap, Settings, CreditCard, Shield,
   ChevronLeft, ChevronRight, Bell, HelpCircle, Coins,
 } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -139,6 +139,24 @@ function AppShellInner({ children }: AppShellProps) {
             }
             return btn;
           })}
+
+          {/* Operators only. Rendered from the server's answer, and the
+              console re-checks it on every request — hiding the link is a
+              convenience, never the control. */}
+          {credits?.isAdmin && (
+            <button
+              onClick={() => navigate('/admin')}
+              className={cn(
+                'flex items-center w-full rounded-md px-2.5 py-2 text-sm font-medium transition-colors mt-2',
+                'text-amber-700 hover:bg-amber-50',
+                collapsed && 'justify-center px-2',
+              )}
+              title="Operations console"
+            >
+              <Shield className={cn('h-4 w-4 shrink-0', !collapsed && 'mr-2.5')} />
+              {!collapsed && 'Operations'}
+            </button>
+          )}
         </nav>
 
         {/* Bottom Nav */}

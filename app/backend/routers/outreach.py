@@ -21,6 +21,7 @@ from services.email_identity import resolve_identity
 from services.outreach_composer import compose_many, parse_findings
 from services.lead_angle import write_angle_note
 from services.leads import LeadsService
+from services import activity
 from services import ai_writer
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,25 @@ async def send_outreach_email(
         identity=identity,
     )
 
+    # Recorded either way. A send that failed is the event an operator most
+    # needs to see, and a trail that logs only successes would report a
+    # healthy outreach channel while nothing was arriving.
+    await activity.record(
+        db,
+        activity.OUTREACH_SENT if result["success"] else activity.OUTREACH_FAILED,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        entity_type="email",
+        status="ok" if result["success"] else "failed",
+        summary=(
+            f"Sent outreach to {data.to_email}"
+            if result["success"]
+            else f"Outreach to {data.to_email} failed: {str(result.get('message'))[:150]}"
+        ),
+        metadata={"to_email": data.to_email, "subject": data.subject},
+    )
+    await db.commit()
+
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result.get("message", "Failed to send email"))
 
@@ -191,6 +211,20 @@ async def send_bulk_outreach(
         body_text_template=data.body_text_template,
         identity=identity,
     )
+
+    sent = result.get("sent", 0) if isinstance(result, dict) else 0
+    failed = result.get("failed", 0) if isinstance(result, dict) else 0
+    await activity.record(
+        db,
+        activity.OUTREACH_SENT,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        entity_type="email",
+        status="failed" if failed and not sent else "ok",
+        summary=f"Bulk outreach: {sent} sent, {failed} failed",
+        metadata={"recipients": len(data.recipients), "sent": sent, "failed": failed},
+    )
+    await db.commit()
 
     return result
 
