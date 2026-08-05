@@ -34,6 +34,7 @@ Do not replace the manual redirect loop with `follow_redirects=True`.
 """
 import asyncio
 import ipaddress
+import re
 import time
 import logging
 import socket
@@ -308,3 +309,92 @@ async def check_website(raw_url: Optional[str]) -> WebsiteCheck:
 
     base.update({"final_url": current, "state": "unreachable", "reason": "too many redirects", "redirect_hops": hops, "has_website": False})
     return base
+
+
+# Most businesses do not put an email on the homepage; they put it behind a
+# link called "Contact". Reading only the homepage is the single largest
+# reason a lead arrives with no address.
+#
+# Ordered by how likely the page is to carry an address. Impressum is first
+# among the non-English terms because German law requires a reachable email
+# on it, making it the highest-yield page on any German site.
+_CONTACT_HINTS = (
+    "contact", "contact-us", "contactus", "get-in-touch", "getintouch",
+    "impressum", "kontakt", "enquiries", "inquiries", "reach-us",
+    "about", "about-us", "aboutus", "team",
+)
+
+# Two extra requests, only when the homepage yielded nothing. Discovery
+# measures every result concurrently, so this multiplies across a whole
+# search — the cap is what keeps a 20-result search from becoming 60 fetches.
+MAX_CONTACT_PAGES = 2
+
+_LINK_PATTERN = re.compile(r"""<a\b[^>]*?href=["']([^"'#]+)["']""", re.I)
+
+
+def find_contact_urls(html: str, base_url: str, limit: int = MAX_CONTACT_PAGES) -> list[str]:
+    """Links on a page that plausibly lead to a published email address.
+
+    Same-host only. An off-site link is somebody else's site, and following it
+    would attribute their address to this business — the same "email a
+    stranger" failure the extractor's domain rules exist to prevent.
+    """
+    base_host = (urlparse(base_url).hostname or "").lower()
+    if not base_host:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    for match in _LINK_PATTERN.finditer(html or ""):
+        href = match.group(1).strip()
+        if not href or href.lower().startswith(("mailto:", "tel:", "javascript:", "data:")):
+            continue
+
+        try:
+            resolved = str(httpx.URL(base_url).join(href))
+        except Exception:
+            continue
+
+        parsed = urlparse(resolved)
+        if parsed.scheme not in ALLOWED_SCHEMES:
+            continue
+        if (parsed.hostname or "").lower() != base_host:
+            continue
+
+        normalised = resolved.split("#")[0].rstrip("/")
+        if normalised in seen or normalised.rstrip("/") == base_url.rstrip("/"):
+            continue
+
+        haystack = f"{parsed.path} {match.group(0)}".lower()
+        for rank, hint in enumerate(_CONTACT_HINTS):
+            if hint in haystack:
+                seen.add(normalised)
+                scored.append((rank, resolved))
+                break
+
+    scored.sort(key=lambda pair: pair[0])
+    return [url for _, url in scored[:limit]]
+
+
+async def fetch_page_html(url: str) -> Optional[str]:
+    """Fetch one contact page and return its HTML, or None.
+
+    Deliberately delegates to check_website rather than issuing its own
+    request. Every guard in this module's docstring applies to a contact URL
+    exactly as it applies to a homepage — the URL is derived from a link on an
+    untrusted page, so it is no more trustworthy than the page that carried
+    it, and a contact link that 302s to 169.254.169.254 is the textbook way
+    to defeat a check performed only on the first hop.
+
+    Never raises. This runs only to improve a lead that is already usable
+    without it, so any failure must degrade to "no extra evidence" rather
+    than losing a measurement that has already succeeded.
+    """
+    try:
+        check = await check_website(url)
+    except Exception:
+        logger.exception("Contact page fetch failed for %s", url)
+        return None
+
+    return check.get("html")

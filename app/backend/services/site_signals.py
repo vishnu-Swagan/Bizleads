@@ -19,7 +19,9 @@ show a fact rather than a number.
 """
 import json
 import re
+from html import unescape
 from typing import Any, Dict, List, Optional, TypedDict
+from urllib.parse import urlparse
 
 # Bumped when the checks or their penalties change, so a stored score can be
 # told apart from one produced by a different ruleset. 1.1.0 added noindex,
@@ -57,28 +59,167 @@ _EMAIL_NOISE = (
     "no-reply", "noreply", "donotreply",
 )
 
-_EMAIL_PATTERN = re.compile(
+# Mail hosts a small business legitimately uses as its own public address.
+# Without this list, "only accept addresses on the site's own domain" would
+# discard the plumber whose site says `dave@gmail.com` — which is most of
+# them, and exactly the lead this product exists to find.
+_CONSUMER_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk",
+    "live.com", "live.co.uk", "yahoo.com", "yahoo.co.uk", "ymail.com",
+    "icloud.com", "me.com", "aol.com", "gmx.com", "gmx.de", "gmx.net",
+    "protonmail.com", "proton.me", "mail.com", "zoho.com", "yandex.com",
+    "btinternet.com", "sky.com", "virginmedia.com", "talktalk.net",
+    "orange.fr", "free.fr", "web.de", "t-online.de", "libero.it",
+})
+
+# Domains that belong to the tooling a site is built with, never to the
+# business. Broader than _EMAIL_NOISE because plain-text scanning reaches
+# parts of the page a mailto: scan never did.
+_INFRA_DOMAINS = (
+    "schema.org", "w3.org", "googleapis.com", "gstatic.com", "cloudflare.com",
+    "jquery.com", "bootstrapcdn.com", "fontawesome.com", "unpkg.com",
+    "jsdelivr.net", "cdnjs.com", "shopify.com", "wix.com", "weebly.com",
+    "sentry.wixpress.com", "adobe.com", "facebook.com", "instagram.com",
+    "twitter.com", "linkedin.com", "youtube.com", "gravatar.com",
+)
+
+_MAILTO_PATTERN = re.compile(
     r"mailto:\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})", re.I
 )
 
+# Plain-text addresses printed on the page rather than linked. Anchored on
+# word boundaries so it does not swallow a leading filename fragment.
+_TEXT_EMAIL_PATTERN = re.compile(
+    r"\b([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b"
+)
 
-def _first_email(html: str) -> Optional[str]:
-    """The first plausible contact address in a mailto: link.
+# Cloudflare's email obfuscation. The address is hex, XORed byte-by-byte with
+# the first byte as the key, and the plaintext never appears in the HTML — so
+# to a scraper the page simply has no email on it at all.
+_CFEMAIL_PATTERN = re.compile(r'data-cfemail="([0-9a-fA-F]+)"')
 
-    Deliberately restricted to mailto: hrefs rather than scanning the whole
-    page for anything @-shaped. A loose regex over raw HTML picks up asset
-    filenames, analytics identifiers and schema fragments, and a single wrong
-    address sends a stranger an email about a business that is not theirs.
+# Human anti-scraping obfuscation: "dave [at] example dot com".
+_OBFUSCATED_AT = re.compile(
+    r"\b([A-Za-z0-9._%+\-]+)\s*(?:\[at\]|\(at\)|\s+at\s+)\s*"
+    r"([A-Za-z0-9.\-]+)\s*(?:\[dot\]|\(dot\)|\s+dot\s+)\s*([A-Za-z]{2,})\b",
+    re.I,
+)
 
-    A mailto link is an address the business chose to publish.
+_SCRIPT_OR_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
+
+# Asset extensions that a filename-shaped match would end in. `logo@2x.png`
+# matches an email pattern otherwise.
+_ASSET_SUFFIXES = (
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js",
+    ".woff", ".woff2", ".ttf", ".ico", ".mp4", ".pdf",
+)
+
+
+def _decode_cfemail(encoded: str) -> Optional[str]:
+    """Decode one Cloudflare-obfuscated address. Returns None if malformed."""
+    try:
+        data = bytes.fromhex(encoded)
+    except ValueError:
+        return None
+    if len(data) < 2:
+        return None
+    key = data[0]
+    try:
+        return "".join(chr(byte ^ key) for byte in data[1:])
+    except ValueError:
+        return None
+
+
+def _registrable_domain(host: str) -> str:
+    """Last two labels of a hostname — good enough to compare site to address.
+
+    Not a public-suffix list, so `example.co.uk` reduces to `co.uk`. That is
+    deliberate: this is used to decide whether an address plausibly belongs to
+    the site being read, and being slightly generous there costs nothing,
+    while shipping a public-suffix dependency for it would.
     """
-    for match in _EMAIL_PATTERN.finditer(html or ""):
+    parts = (host or "").lower().strip().split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else (host or "").lower()
+
+
+def _acceptable(candidate: str, site_host: Optional[str], *, linked: bool) -> bool:
+    """Whether an address is safe to record as this business's contact.
+
+    `linked` addresses came from a mailto: href — the business explicitly
+    published them, so they are trusted on any domain.
+
+    Plain-text addresses are held to a higher bar, because the original code
+    refused to read them at all for a good reason: a wrong address emails a
+    stranger about a business that is not theirs. One of two things must hold —
+    the address is on the site's own domain, or it is at a consumer mail host
+    that a small business plausibly uses as its public address. An address at
+    some third party's domain found loose in the page text is somebody else's.
+    """
+    if len(candidate) > 254:  # RFC 5321 maximum
+        return False
+    if any(noise in candidate for noise in _EMAIL_NOISE):
+        return False
+    if candidate.endswith(_ASSET_SUFFIXES):
+        return False
+
+    domain = candidate.rsplit("@", 1)[-1]
+    if any(domain.endswith(infra) for infra in _INFRA_DOMAINS):
+        return False
+
+    if linked:
+        return True
+
+    if domain in _CONSUMER_MAIL_DOMAINS:
+        return True
+    if site_host and _registrable_domain(domain) == _registrable_domain(site_host):
+        return True
+    return False
+
+
+def _first_email(html: str, site_host: Optional[str] = None) -> Optional[str]:
+    """The address this business publishes for itself, or None.
+
+    Reads four ways, most trustworthy first:
+
+      1. mailto: hrefs — an address the business chose to link.
+      2. Cloudflare data-cfemail — the same thing, obfuscated by the CDN.
+      3. Plain text printed on the page, filtered by _acceptable.
+      4. "name [at] domain [dot] com" written to defeat scrapers.
+
+    Restricting this to mailto: alone was safe but found almost nothing: most
+    small-business sites print the address as text, or let Cloudflare scramble
+    it. The domain rules in _acceptable are what make the wider scan safe.
+    """
+    # Scripts and styles go first: analytics config and CSS content strings
+    # are full of @-shaped tokens that are not addresses. Entities are then
+    # decoded, because `&#104;ello&#64;shop.co.uk` is a common way of hiding
+    # an address from exactly this kind of scan.
+    text = unescape(_SCRIPT_OR_STYLE.sub(" ", html or ""))
+
+    for match in _MAILTO_PATTERN.finditer(text):
         candidate = match.group(1).strip().rstrip(".").lower()
-        if any(noise in candidate for noise in _EMAIL_NOISE):
-            continue
-        if len(candidate) > 254:  # RFC 5321 maximum
-            continue
-        return candidate
+        if _acceptable(candidate, site_host, linked=True):
+            return candidate
+
+    for match in _CFEMAIL_PATTERN.finditer(html or ""):
+        decoded = _decode_cfemail(match.group(1))
+        if decoded:
+            candidate = decoded.strip().rstrip(".").lower()
+            # Cloudflare only ever obfuscates a real mailto/text address, so
+            # this is as explicit a publication as a link.
+            if "@" in candidate and _acceptable(candidate, site_host, linked=True):
+                return candidate
+
+    for match in _TEXT_EMAIL_PATTERN.finditer(text):
+        candidate = match.group(1).strip().rstrip(".").lower()
+        if _acceptable(candidate, site_host, linked=False):
+            return candidate
+
+    for match in _OBFUSCATED_AT.finditer(text):
+        candidate = f"{match.group(1)}@{match.group(2)}.{match.group(3)}".lower()
+        if _acceptable(candidate, site_host, linked=False):
+            return candidate
+
     return None
 
 
@@ -286,7 +427,9 @@ def extract_signals(
         #
         # The page has already been fetched and parsed for the checks above,
         # so this costs nothing extra and involves no additional request.
-        "contact_email": _first_email(html),
+        # The host is passed so a plain-text address can be checked against
+        # the site's own domain — see _acceptable.
+        "contact_email": _first_email(html, urlparse(final_url).hostname),
         # Phone and address are read off the page for the same reason the
         # email is: the listing provider carries them for some countries and
         # not others, so a provider-only pipeline leaves most non-UK/US leads
