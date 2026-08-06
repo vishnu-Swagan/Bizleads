@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -262,6 +262,41 @@ async def add_message(
     return _ticket_dict(ticket, await _messages_for(db, ticket.id))
 
 
+@router.delete("/{ticket_id}")
+async def delete_ticket(
+    ticket_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Delete a request and its whole thread. Irreversible.
+
+    Unlike account deletion this needs no typed confirmation. The asymmetry is
+    deliberate and worth stating: deleting an account destroys a customer's
+    data and cannot be undone by anybody, whereas a support request is the
+    operators' own note to themselves — losing one by accident costs them a
+    retype, not a customer. Guarding both equally would make the guard on the
+    dangerous one feel routine.
+
+    The deletion is recorded in the activity trail with the title, so the fact
+    that a request existed survives the request itself.
+    """
+    ticket = await _get_ticket(db, ticket_id)
+    title = ticket.title
+
+    await activity.record(
+        db, "support.deleted", user_id=admin.id, user_email=admin.email,
+        entity_type="support_ticket", entity_id=ticket_id,
+        summary=f"Deleted support request: {title}",
+        metadata={"title": title, "status": ticket.status},
+    )
+
+    await db.execute(delete(Support_messages).where(Support_messages.ticket_id == ticket_id))
+    await db.execute(delete(Support_tickets).where(Support_tickets.id == ticket_id))
+    await db.commit()
+
+    return {"deleted": ticket_id, "title": title}
+
+
 @router.post("/{ticket_id}/status", dependencies=[Depends(get_admin_user)])
 async def set_status(
     ticket_id: int, data: StatusUpdate, db: AsyncSession = Depends(get_db)
@@ -397,6 +432,74 @@ async def agent_queue(
         "local_agent_active": (
             since_local is not None and since_local < LOCAL_HEARTBEAT_TTL_SECONDS
         ),
+    }
+
+
+@router.delete("/agent/{ticket_id}")
+async def agent_delete(
+    ticket_id: int,
+    x_support_secret: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Delete a request from the engineering side.
+
+    This does widen what the shared secret can do: until now it could read the
+    queue and add to it, and now it can destroy part of it. That is a real
+    escalation for a credential which, unlike an operator's session, is also
+    embedded in a cloud routine's prompt — so it is worth naming rather than
+    slipping in.
+
+    It is here because clearing test requests is a normal part of setting this
+    up, and the alternative was the operator repeating the same click for
+    every one. If the queue ever holds anything worth keeping, this endpoint
+    should go and deletion should be an operator-session action only.
+    """
+    _verify_agent_secret(x_support_secret)
+
+    ticket = await _get_ticket(db, ticket_id)
+    title = ticket.title
+
+    await activity.record(
+        db, "support.deleted", user_email="engineering",
+        entity_type="support_ticket", entity_id=ticket_id,
+        summary=f"Deleted support request: {title}",
+        metadata={"title": title, "status": ticket.status, "by": "agent"},
+    )
+
+    await db.execute(delete(Support_messages).where(Support_messages.ticket_id == ticket_id))
+    await db.execute(delete(Support_tickets).where(Support_tickets.id == ticket_id))
+    await db.commit()
+
+    return {"deleted": ticket_id, "title": title}
+
+
+@router.get("/agent/all")
+async def agent_all(
+    x_support_secret: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+) -> Dict[str, Any]:
+    """Every request regardless of status, ids and titles only.
+
+    The queue endpoint deliberately returns only what still wants attention.
+    This exists so a cleanup can see what it is about to remove, and so the
+    result can be verified afterwards rather than assumed.
+    """
+    _verify_agent_secret(x_support_secret)
+
+    rows = (
+        await db.execute(
+            select(Support_tickets).order_by(Support_tickets.id.asc()).limit(limit)
+        )
+    ).scalars().all()
+
+    return {
+        "items": [
+            {"id": t.id, "title": t.title, "status": t.status,
+             "created_at": t.created_at.isoformat() if t.created_at else None}
+            for t in rows
+        ],
+        "count": len(rows),
     }
 
 

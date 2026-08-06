@@ -22,7 +22,7 @@ import {
 import { client } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import { Plus, Send, CheckCircle2, RotateCcw, Info, AlertTriangle } from 'lucide-react';
+import { Plus, Send, CheckCircle2, RotateCcw, Info, AlertTriangle, Trash2 } from 'lucide-react';
 
 interface Message {
   id: number;
@@ -69,6 +69,7 @@ export default function AdminSupport() {
   const [agentConfigured, setAgentConfigured] = useState(true);
   const [composing, setComposing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -139,6 +140,24 @@ export default function AdminSupport() {
       await load();
     } catch {
       toast.error('Could not add that message.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await client.apiCall.invoke({
+        url: `/api/v1/support/${selected.id}`, method: 'DELETE', data: {},
+      });
+      toast.success('Request deleted.');
+      setSelected(null);
+      setConfirmDelete(false);
+      await load();
+    } catch {
+      toast.error('Could not delete that request.');
     } finally {
       setBusy(false);
     }
@@ -329,8 +348,31 @@ export default function AdminSupport() {
                           Close
                         </Button>
                       )}
+                      <Button
+                        size="sm" variant="ghost" disabled={busy}
+                        onClick={() => setConfirmDelete(!confirmDelete)}
+                        className="gap-1.5 text-slate-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </Button>
                     </div>
                   </div>
+
+                  {/* No typed confirmation here, unlike account deletion.
+                      Losing a request costs a retype; losing an account
+                      costs a customer their data. Guarding both the same
+                      way makes the guard on the dangerous one feel routine. */}
+                  {confirmDelete && (
+                    <div className="rounded border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 flex-wrap">
+                      <p className="text-xs text-red-900">
+                        Delete this request and its whole thread? This cannot be undone.
+                      </p>
+                      <Button size="sm" variant="destructive" disabled={busy} onClick={remove}>
+                        Delete permanently
+                      </Button>
+                    </div>
+                  )}
 
                   {selected.body && (
                     <div className="rounded border border-slate-200 bg-slate-50 p-3">

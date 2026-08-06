@@ -318,3 +318,86 @@ class TestRoutingBetweenTheTwoAgents:
             "/api/v1/support/agent/heartbeat", json={"agent": "local"}
         )
         assert response.status_code == 401
+
+
+class TestDeleting:
+    async def test_an_admin_can_delete_a_request_and_its_thread(
+        self, user_a_client, as_admin, db_session
+    ):
+        from sqlalchemy import select
+        from models.support_tickets import Support_messages, Support_tickets
+
+        ticket = await _raise(user_a_client)
+        await user_a_client.post(
+            f"/api/v1/support/{ticket['id']}/messages", json={"body": "detail"}
+        )
+
+        response = await user_a_client.request("DELETE", f"/api/v1/support/{ticket['id']}")
+
+        assert response.status_code == 200
+        assert (await db_session.execute(select(Support_tickets))).scalars().all() == []
+        # The thread goes with it — orphaned messages pointing at a request
+        # that no longer exists are just rows nobody can read.
+        assert (await db_session.execute(select(Support_messages))).scalars().all() == []
+
+    async def test_a_non_admin_cannot_delete(self, user_a_client, as_admin, monkeypatch):
+        ticket = await _raise(user_a_client)
+        monkeypatch.delenv("ADMIN_EMAILS", raising=False)
+
+        response = await user_a_client.request("DELETE", f"/api/v1/support/{ticket['id']}")
+        assert response.status_code == 403
+
+    async def test_the_agent_can_delete_with_the_secret(
+        self, user_a_client, anon_client, as_admin, agent_secret
+    ):
+        ticket = await _raise(user_a_client)
+
+        response = await anon_client.request(
+            "DELETE", f"/api/v1/support/agent/{ticket['id']}",
+            headers={"X-Support-Secret": SECRET},
+        )
+        assert response.status_code == 200
+
+    async def test_the_agent_cannot_delete_without_it(
+        self, user_a_client, anon_client, as_admin, agent_secret
+    ):
+        ticket = await _raise(user_a_client)
+        response = await anon_client.request("DELETE", f"/api/v1/support/agent/{ticket['id']}")
+        assert response.status_code == 401
+
+    async def test_the_deletion_is_recorded_before_the_rows_go(
+        self, user_a_client, as_admin, db_session
+    ):
+        """So the fact a request existed survives the request itself."""
+        import json
+        from sqlalchemy import select
+        from models.activity_events import Activity_events
+
+        ticket = await _raise(user_a_client, title="Something worth remembering")
+        await user_a_client.request("DELETE", f"/api/v1/support/{ticket['id']}")
+
+        rows = (
+            await db_session.execute(
+                select(Activity_events).where(Activity_events.action == "support.deleted")
+            )
+        ).scalars().all()
+
+        assert len(rows) == 1
+        assert json.loads(rows[0].metadata_json)["title"] == "Something worth remembering"
+
+    async def test_agent_all_lists_every_status(
+        self, user_a_client, anon_client, as_admin, agent_secret
+    ):
+        """The queue shows only open work; a cleanup needs to see everything."""
+        first = await _raise(user_a_client, title="One")
+        await _raise(user_a_client, title="Two")
+        await user_a_client.post(
+            f"/api/v1/support/{first['id']}/status", json={"status": "resolved"}
+        )
+
+        body = (await anon_client.get(
+            "/api/v1/support/agent/all", headers={"X-Support-Secret": SECRET}
+        )).json()
+
+        assert body["count"] == 2
+        assert {i["title"] for i in body["items"]} == {"One", "Two"}
