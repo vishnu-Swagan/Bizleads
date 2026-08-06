@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from dependencies.tenancy import EntityPolicy, ensure_workspace_for_user, filter_writes, get_current_workspace
 from models.workspaces import Workspaces
+from services import account_review
 from schemas.auth import UserResponse
 
 WORKSPACE_POLICY = EntityPolicy(
@@ -44,8 +45,17 @@ async def test_ensure_workspace_for_user_creates_with_trial_defaults(db_session)
     assert workspace.owner_id == "user-new"
     assert workspace.plan == "trial"
     assert workspace.subscription_status == "trialing"
-    assert workspace.monthly_credits == 25
+    # No credits at creation. The free allowance is granted by an operator on
+    # approval, so creating the workspace with 25 already in it would hand out
+    # exactly what the review exists to withhold.
+    assert workspace.monthly_credits == 0
     assert workspace.max_seats == 1
+
+    # And the review is opened at the same moment, or nobody would know to
+    # grant them.
+    approval = await account_review.get_approval(db_session, "user-new")
+    assert approval is not None
+    assert approval.status == account_review.STATUS_PENDING
 
 
 async def test_ensure_workspace_for_user_is_idempotent(db_session):

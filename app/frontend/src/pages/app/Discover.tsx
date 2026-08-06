@@ -213,6 +213,18 @@ export default function AppDiscover() {
         setJobStatus('trial_expired');
         setTrialMessage(detail.message ?? '');
         toast.error(detail.message ?? 'Your free trial has ended.');
+      } else if (detail?.error === 'account_pending_approval') {
+        // Not a failure and not the user's fault. Reusing the generic error
+        // state here would tell somebody who has done nothing wrong that
+        // something broke, and send them to support to report a working
+        // system doing exactly what it should.
+        setJobStatus('pending_approval');
+        setTrialMessage(detail.message ?? '');
+        toast.info(detail.message ?? 'Your account is awaiting approval.');
+      } else if (detail?.error === 'account_blocked') {
+        setJobStatus('blocked');
+        setTrialMessage(detail.message ?? '');
+        toast.error(detail.message ?? 'This account has been suspended.');
       } else if (detail?.error === 'insufficient_credits') {
         setJobStatus('quota_exceeded');
         toast.error(detail.message);
@@ -477,6 +489,39 @@ export default function AppDiscover() {
         )}
 
         {/* Quota exceeded */}
+        {jobStatus === 'pending_approval' && (
+          <Card className="border-blue-200 bg-blue-50">
+            <CardContent className="p-5 flex items-start gap-3">
+              <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-blue-900">Waiting for approval</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  {trialMessage ||
+                    'Your account is being reviewed. Your free credits are added once it is approved.'}
+                </p>
+                {/* No "contact support" button. There is nothing for them to
+                    do, and inviting a ticket for a queue that clears itself
+                    creates work for both sides. */}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {jobStatus === 'blocked' && (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="p-5 flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-red-900">Account suspended</p>
+                <p className="text-xs text-red-700 mt-0.5">
+                  {trialMessage ||
+                    'This account has been suspended. Contact support if you believe this is a mistake.'}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {jobStatus === 'trial_expired' && (
           <Card className="border-amber-200 bg-amber-50">
             <CardContent className="p-5 flex items-center justify-between gap-4">

@@ -26,19 +26,23 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, or_, select
+from pydantic import BaseModel
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from dependencies.auth import get_admin_user
+from models.account_approvals import Account_approvals
+from models.account_signals import Account_signals
 from models.activity_events import Activity_events
 from models.auth import User
 from models.leads import Leads
 from models.search_jobs import Search_jobs
 from models.workspaces import Workspaces
-from services import activity
+from schemas.auth import UserResponse
+from services import account_review, activity
 from services.admin_access import admin_access_configured
 from services.discovery_provider import (
     active_provider_slug,
@@ -513,6 +517,256 @@ def _csv_response(filename: str, headers: List[str], rows: List[List[Any]]) -> S
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------- Account review ----------
+#
+# The only endpoints here that write. Each is a named action with its own
+# authorisation test, rather than a generic update behind the admin gate, and
+# each records who did it — an approval nobody can be asked about is not an
+# audit trail.
+
+class DecisionRequest(BaseModel):
+    reason: str = ""
+
+
+class DeleteRequest(BaseModel):
+    reason: str = ""
+    # Deletion removes the account and everything it owns and cannot be
+    # undone, so it requires the operator to type the address they mean.
+    # A confirmation that is just `true` is one misplaced click.
+    confirm_email: str
+
+
+@router.get("/approvals")
+async def approvals(
+    db: AsyncSession = Depends(get_db),
+    status: Optional[str] = Query(None, description="pending, approved, rejected or blocked"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+) -> Dict[str, Any]:
+    """Accounts awaiting a decision, with the evidence to make it."""
+    conditions = [Account_approvals.status == status] if status else []
+    total = await _count(db, Account_approvals, *conditions)
+
+    stmt = select(Account_approvals)
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
+    stmt = stmt.order_by(Account_approvals.created_at.desc()).offset(skip).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    items = []
+    for row in rows:
+        risk = account_review.parse_risk(row)
+        # Recomputed for pending rows so the reviewer sees the position now,
+        # not at signup — another account may have appeared on that address
+        # since. Decided rows keep the evidence the decision was made on.
+        if row.status == account_review.STATUS_PENDING:
+            signal = (
+                await db.execute(
+                    select(Account_signals)
+                    .where(Account_signals.user_id == row.user_id)
+                    .order_by(Account_signals.id.asc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            risk = await account_review.assess(
+                db, user_id=row.user_id, email=row.email,
+                ip=signal.ip if signal else None,
+            )
+
+        items.append({
+            "id": row.id,
+            "user_id": row.user_id,
+            "email": row.email,
+            "workspace_id": row.workspace_id,
+            "status": row.status,
+            "credits_granted": row.credits_granted,
+            "decided_by": row.decided_by,
+            "decided_at": row.decided_at.isoformat() if row.decided_at else None,
+            "reason": row.reason,
+            "risk": risk,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        })
+
+    return {
+        "items": items, "total": total, "skip": skip, "limit": limit,
+        "free_credits": account_review.FREE_CREDITS,
+    }
+
+
+async def _decide(
+    db: AsyncSession, user_id: str, admin: UserResponse, status: str, reason: str,
+) -> Account_approvals:
+    approval = await account_review.get_approval(db, user_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="No account review found for this user")
+
+    approval.status = status
+    approval.decided_by = admin.email or admin.id
+    approval.decided_at = datetime.now(timezone.utc)
+    approval.reason = (reason or "")[:2000]
+    return approval
+
+
+@router.post("/approvals/{user_id}/approve")
+async def approve_account(
+    user_id: str,
+    data: DecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Clear an account and grant it the free credits."""
+    approval = await _decide(db, user_id, admin, account_review.STATUS_APPROVED, data.reason)
+
+    workspace = (
+        await db.execute(
+            select(Workspaces).where(Workspaces.owner_id == user_id)
+            .order_by(Workspaces.id.asc()).limit(1)
+        )
+    ).scalars().first()
+
+    if workspace:
+        # Set rather than add. Approving twice must not grant twice, and an
+        # operator correcting a mistake should not have to reason about what
+        # the balance already was.
+        workspace.monthly_credits = account_review.FREE_CREDITS
+        approval.credits_granted = account_review.FREE_CREDITS
+
+    await activity.record(
+        db, "account.approved", user_id=admin.id, user_email=admin.email,
+        entity_type="account", entity_id=user_id,
+        summary=f"Approved {approval.email or user_id} and granted {account_review.FREE_CREDITS} credits",
+        metadata={"reason": data.reason, "credits": account_review.FREE_CREDITS},
+    )
+    await db.commit()
+
+    return {"status": "approved", "credits_granted": account_review.FREE_CREDITS}
+
+
+@router.post("/approvals/{user_id}/reject")
+async def reject_account(
+    user_id: str,
+    data: DecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Refuse an account the free credits. Reversible by approving later."""
+    approval = await _decide(db, user_id, admin, account_review.STATUS_REJECTED, data.reason)
+    await activity.record(
+        db, "account.rejected", user_id=admin.id, user_email=admin.email,
+        entity_type="account", entity_id=user_id,
+        summary=f"Rejected {approval.email or user_id}",
+        metadata={"reason": data.reason},
+    )
+    await db.commit()
+    return {"status": "rejected"}
+
+
+@router.post("/approvals/{user_id}/block")
+async def block_account(
+    user_id: str,
+    data: DecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Suspend an account. Reversible, and keeps all of its data."""
+    approval = await account_review.get_approval(db, user_id)
+    if approval is None:
+        # An account that predates the gate has no row, and blocking must
+        # still work for it — otherwise the oldest accounts are the ones
+        # that cannot be suspended.
+        approval = Account_approvals(user_id=user_id, status=account_review.STATUS_BLOCKED)
+        db.add(approval)
+        await db.flush()
+
+    approval.status = account_review.STATUS_BLOCKED
+    approval.decided_by = admin.email or admin.id
+    approval.decided_at = datetime.now(timezone.utc)
+    approval.reason = (data.reason or "")[:2000]
+
+    await activity.record(
+        db, "account.blocked", user_id=admin.id, user_email=admin.email,
+        entity_type="account", entity_id=user_id,
+        summary=f"Blocked {approval.email or user_id}",
+        metadata={"reason": data.reason},
+    )
+    await db.commit()
+    return {"status": "blocked"}
+
+
+@router.post("/approvals/{user_id}/unblock")
+async def unblock_account(
+    user_id: str,
+    data: DecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Lift a block, returning the account to approved."""
+    approval = await _decide(db, user_id, admin, account_review.STATUS_APPROVED, data.reason)
+    await activity.record(
+        db, "account.unblocked", user_id=admin.id, user_email=admin.email,
+        entity_type="account", entity_id=user_id,
+        summary=f"Unblocked {approval.email or user_id}",
+        metadata={"reason": data.reason},
+    )
+    await db.commit()
+    return {"status": "approved"}
+
+
+@router.delete("/accounts/{user_id}")
+async def delete_account(
+    user_id: str,
+    data: DeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Delete an account and everything it owns. Irreversible.
+
+    Guarded three ways, because there is no undo: the operator must type the
+    account's own address, an operator cannot delete themselves, and the
+    deletion is written to the activity trail before the rows go — the trail
+    entry has to survive the account it describes, which is the whole reason
+    that table stores an email rather than a foreign key.
+    """
+    user = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="No such account")
+
+    if (data.confirm_email or "").strip().lower() != (user.email or "").strip().lower():
+        raise HTTPException(
+            status_code=400,
+            detail="confirm_email must match the account's email address exactly",
+        )
+
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    # Written first. If the deletes fail halfway, a record that somebody tried
+    # is more useful than silence.
+    await activity.record(
+        db, "account.deleted", user_id=admin.id, user_email=admin.email,
+        entity_type="account", entity_id=user_id,
+        summary=f"Deleted account {user.email}",
+        metadata={"reason": data.reason, "email": user.email},
+    )
+
+    workspace_ids = [
+        w.id for w in (
+            await db.execute(select(Workspaces).where(Workspaces.owner_id == user_id))
+        ).scalars().all()
+    ]
+
+    await db.execute(delete(Leads).where(Leads.user_id == user_id))
+    await db.execute(delete(Search_jobs).where(Search_jobs.user_id == user_id))
+    await db.execute(delete(Account_signals).where(Account_signals.user_id == user_id))
+    await db.execute(delete(Account_approvals).where(Account_approvals.user_id == user_id))
+    if workspace_ids:
+        await db.execute(delete(Workspaces).where(Workspaces.id.in_(workspace_ids)))
+    await db.execute(delete(User).where(User.id == user_id))
+
+    await db.commit()
+    return {"status": "deleted", "email": user.email}
 
 
 @router.get("/export/activity.csv")

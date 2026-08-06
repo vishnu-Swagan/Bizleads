@@ -7,7 +7,7 @@ import logging
 from time import monotonic
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,8 @@ from services.pagespeed import is_pagespeed_configured
 from services.qualification import qualify_website
 from services.entitlements import has_unlimited_credits
 from services import activity
+from services import account_review
+from services.client_ip import describe
 from services.lead_angle import write_angle_note
 from services.leads import LeadsService
 from services import ai_writer
@@ -205,6 +207,7 @@ async def estimate_search(
 @router.post("/run")
 async def run_discovery(
     data: DiscoverRequest,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -222,6 +225,24 @@ async def run_discovery(
     # answers a question they did not ask while hiding the one thing they need
     # to do. Both checks still precede any job row or credit deduction.
     _refuse_if_trial_expired(workspace, current_user.email)
+
+    # Where the account is used from, recorded before the gate so a blocked
+    # account still contributes to the picture of which addresses are opening
+    # accounts. Never raises.
+    ip, country, user_agent = describe(request)
+    await account_review.record_signal(
+        db, user_id=current_user.id, email=current_user.email,
+        ip=ip, country=country, user_agent=user_agent,
+    )
+    # Assess a pending signup once, now that an address exists. Runs before
+    # the refusal so the operator has the evidence waiting for them the first
+    # time the account is turned away, rather than after they ask why.
+    await account_review.ensure_assessed(
+        db, user_id=current_user.id, email=current_user.email, ip=ip
+    )
+    await db.commit()
+
+    await _refuse_if_not_approved(db, current_user)
 
     if not is_discovery_configured():
         return {
@@ -509,6 +530,44 @@ AUDIT_BUDGET_SECONDS = 70.0
 # every audit ran long first.
 ANGLE_BUDGET_SECONDS = 90.0
 CREDITS_PER_QUALIFICATION = 1
+
+
+async def _refuse_if_not_approved(db, current_user) -> None:
+    """Refuse an account that has not been cleared, or has been blocked.
+
+    Two distinct refusals, because they need two different responses. Pending
+    is a wait: the person has done nothing wrong and needs to know somebody is
+    looking. Blocked is a decision, and saying "pending review" to somebody
+    who has been blocked would leave them refreshing a page forever.
+
+    An account with no approval row predates the gate and passes straight
+    through — see services/account_review.access_state.
+    """
+    approval = await account_review.get_approval(db, current_user.id)
+    state = account_review.access_state(approval)
+
+    if state == "allowed":
+        return
+
+    if state == "blocked":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "account_blocked",
+                "message": "This account has been suspended. Contact support if you believe this is a mistake.",
+            },
+        )
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "account_pending_approval",
+            "message": (
+                "Your account is waiting to be approved. You will receive your "
+                f"{account_review.FREE_CREDITS} free credits once it has been reviewed."
+            ),
+        },
+    )
 
 
 def _refuse_if_trial_expired(workspace, email: str = "") -> None:

@@ -45,9 +45,12 @@ async def test_usage_creates_trial_workspace_for_new_user(user_a_client, db_sess
     assert body["plan"] == "trial"
     assert body["plan_name"] == "Trial"
     assert body["subscription_status"] == "trialing"
-    assert body["credits_total"] == 25
+    # Zero until an operator approves the account. The free 25 are granted by
+    # a person now, so a fresh workspace reporting 25 would be showing the
+    # customer credits the review has not yet released.
+    assert body["credits_total"] == 0
     assert body["credits_used"] == 0
-    assert body["credits_remaining"] == 25
+    assert body["credits_remaining"] == 0
     assert body["max_seats"] == 1
     assert body["trial_ends_at"]
     assert body["credits_reset_at"]

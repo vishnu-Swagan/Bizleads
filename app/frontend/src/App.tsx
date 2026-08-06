@@ -26,6 +26,7 @@ import ProtectedAdminRoute from './components/ProtectedAdminRoute';
 import { CreditsProvider } from './contexts/CreditsContext';
 import AdminOverview from './pages/admin/Overview';
 import AdminActivity from './pages/admin/Activity';
+import AdminApprovals from './pages/admin/Approvals';
 import AdminUsers from './pages/admin/Users';
 import AdminWorkspaces from './pages/admin/Workspaces';
 import AdminRevenue from './pages/admin/Revenue';
@@ -99,6 +100,7 @@ const AppRoutes = () => (
         ProtectedAdminRoute decides what to render, never what is permitted. */}
     <Route path="/admin" element={<AdminRoute><AdminOverview /></AdminRoute>} />
     <Route path="/admin/activity" element={<AdminRoute><AdminActivity /></AdminRoute>} />
+    <Route path="/admin/approvals" element={<AdminRoute><AdminApprovals /></AdminRoute>} />
     <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
     <Route path="/admin/workspaces" element={<AdminRoute><AdminWorkspaces /></AdminRoute>} />
     <Route path="/admin/revenue" element={<AdminRoute><AdminRevenue /></AdminRoute>} />

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from dependencies.auth import get_current_user
 from models.workspaces import Workspaces
+from services import account_review
 from schemas.auth import UserResponse
 
 logger = logging.getLogger(__name__)
@@ -146,7 +147,11 @@ async def ensure_workspace_for_user(user: UserResponse, db: AsyncSession) -> Wor
         owner_id=user.id,
         plan="trial",
         subscription_status="trialing",
-        monthly_credits=25,
+        # No credits until an operator grants them. The free allowance is now
+        # something a person decides to give, so creating the workspace with
+        # 25 already in it would hand out exactly what the review exists to
+        # withhold. account_review.approve() sets this on approval.
+        monthly_credits=0,
         credits_used=0,
         max_seats=1,
         trial_ends_at=(now + timedelta(days=7)).isoformat(),
@@ -155,6 +160,13 @@ async def ensure_workspace_for_user(user: UserResponse, db: AsyncSession) -> Wor
     db.add(workspace)
     await db.commit()
     await db.refresh(workspace)
+
+    # Opened only for workspaces created from here on. Accounts that already
+    # existed never get a row and stay allowed — see account_review.
+    await account_review.open_pending(
+        db, user_id=user.id, email=user.email, workspace_id=workspace.id
+    )
+    await db.commit()
     return workspace
 
 

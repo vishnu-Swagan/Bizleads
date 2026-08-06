@@ -11,11 +11,12 @@ import { Link, useLocation } from 'react-router-dom';
 import { useCredits } from '@/contexts/CreditsContext';
 import { cn } from '@/lib/utils';
 import {
-  Activity, BarChart3, Users, Building2, PoundSterling, HeartPulse, ArrowLeft,
+  Activity, BarChart3, Users, Building2, PoundSterling, HeartPulse, ArrowLeft, UserCheck,
 } from 'lucide-react';
 
 const NAV = [
   { to: '/admin', label: 'Overview', icon: BarChart3, exact: true },
+  { to: '/admin/approvals', label: 'Approvals', icon: UserCheck },
   { to: '/admin/activity', label: 'Activity', icon: Activity },
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/workspaces', label: 'Workspaces', icon: Building2 },
