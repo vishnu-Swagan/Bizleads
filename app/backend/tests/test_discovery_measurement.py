@@ -25,6 +25,7 @@ from time import monotonic
 import pytest
 
 import routers.discover as discover
+import services.discovery_measure as discovery_measure
 from models.workspaces import Workspaces
 from tests.conftest import USER_A_ID
 
@@ -102,7 +103,7 @@ def _stub_measurement(monkeypatch, handler):
     async def fake(url, **kwargs):
         return handler(url, **kwargs)
 
-    monkeypatch.setattr(discover, "qualify_website", fake)
+    monkeypatch.setattr(discovery_measure, "qualify_website", fake)
 
 
 async def _run_discovery(client, **payload):
@@ -280,7 +281,7 @@ class TestTheAuditBudget:
                 for i in range(4)]
         _stub_search(monkeypatch, rows)
         # Nothing may audit: the budget is already spent before the first call.
-        monkeypatch.setattr(discover, "DISCOVERY_AUDIT_BUDGET_SECONDS", -1.0)
+        monkeypatch.setattr(discovery_measure, "DISCOVERY_AUDIT_BUDGET_SECONDS", -1.0)
 
         audit_flags = []
 
@@ -313,7 +314,7 @@ class TestTheAuditBudget:
             await asyncio.sleep(0.05)
             return _measurement()
 
-        monkeypatch.setattr(discover, "qualify_website", slow)
+        monkeypatch.setattr(discovery_measure, "qualify_website", slow)
 
         started = monotonic()
         response = await _run_discovery(user_a_client)

@@ -36,6 +36,7 @@ from models.outreach_drafts import Outreach_drafts
 from schemas.auth import UserResponse
 from services.leads import LeadsService
 from services.discovery_provider import MAX_LIMIT, search_places
+from services.discovery_measure import measure_results
 from services.outreach_composer import compose_many
 from services.qualification import qualify_website
 from services.scoring import build_score_breakdown
@@ -45,7 +46,12 @@ logger = logging.getLogger(__name__)
 # Mirrors routers/discover.py's CREDITS_PER_QUALIFICATION exactly. Kept as its
 # own constant rather than imported so this module has no import-time
 # dependency on the router package.
-CREDITS_PER_QUALIFICATION = 1
+#
+# Zero since measurement became part of what a search buys. Retained rather
+# than deleted because both this module and the router must agree on the
+# price, and a named constant at zero makes the agreement visible; two call
+# sites quietly hardcoding 0 would drift the moment one of them changed.
+CREDITS_PER_QUALIFICATION = 0
 
 
 def _next_run_at(schedule: str, now: datetime) -> Optional[datetime]:
@@ -85,12 +91,24 @@ def _lead_create_payload(biz: Dict[str, Any], automation: Automations) -> Dict[s
         "location": (biz.get("location") or automation.city or "").strip(),
         "country": biz.get("country") or automation.country or "",
         "website_url": biz.get("website_url") or "",
-        "website_score": None,
-        "social_score": None,
+        # Carried from the measurement the search just performed. These were
+        # hardcoded to None/"[]" back when a saved lead genuinely had not been
+        # measured yet; leaving them that way now would measure every result
+        # and then throw the score away, so the lead would land in the
+        # pipeline looking unchecked and the Qualify step would have to redo
+        # work that had already been done.
+        #
+        # Still None when the site could not be read. That is not the same as
+        # a measured zero, and must stay distinguishable.
+        "website_score": biz.get("website_score"),
+        "social_score": biz.get("social_score"),
         "has_website": biz.get("has_website"),
-        "social_platforms": "[]",
+        "social_platforms": json.dumps(biz.get("social_platforms") or []),
         "contact_email": biz.get("contact_email") or "",
         "contact_phone": biz.get("contact_phone") or "",
+        "address": biz.get("full_address") or None,
+        "findings": json.dumps(biz["findings"]) if biz.get("findings") else None,
+        "qualified_at": biz.get("qualified_at") or None,
         "pipeline_stage": "new_lead",
         "priority": "medium",
         "notes_count": 0,
@@ -130,28 +148,36 @@ async def _save_new_leads(
 async def _qualify_new_leads(
     db: AsyncSession, automation: Automations, user_id: str, new_leads: List[Leads], workspace
 ) -> tuple[List[Leads], int, bool]:
-    """Qualify up to max_leads_per_run new leads, exactly as POST /qualify does.
+    """Measure up to max_leads_per_run new leads, as discovery now does.
 
-    Stops the moment the workspace is out of credits rather than borrowing
-    against a future reset — an automation that overspends unattended is the
-    exact failure mode the credit check exists to prevent.
+    No longer charges, and no longer stops on the balance.
+
+    Measurement became part of what a search buys when discovery started
+    measuring every result it returns. This path was left behind: it went on
+    charging a credit per lead and refusing to run once the balance hit zero,
+    which produced two failures at once. Accounts exempt from metering were
+    stopped anyway, because the check read the raw balance and never consulted
+    has_unlimited_credits — so an unmetered account's automation died at "out
+    of credits" it was never supposed to be spending. And new accounts, which
+    now start at zero credits pending approval, measured nothing at all.
+
+    The runaway protection that the credit check was really providing is
+    max_leads_per_run, which is applied on the line below and bounds every run
+    regardless of balance.
     """
     service = LeadsService(db)
     to_qualify = new_leads[: automation.max_leads_per_run]
 
     qualified: List[Leads] = []
     charged = 0
+    # Always False now that measuring costs nothing. Kept so the return
+    # contract and the "credit_exhausted" field callers read stay stable;
+    # removing it would be a breaking change to say something that can no
+    # longer happen.
     exhausted = False
 
     for lead in to_qualify:
-        credits_remaining = workspace.monthly_credits - workspace.credits_used
-        if credits_remaining < CREDITS_PER_QUALIFICATION:
-            exhausted = True
-            break
-
         measurement = await qualify_website(lead.website_url)
-        workspace.credits_used += CREDITS_PER_QUALIFICATION
-        charged += CREDITS_PER_QUALIFICATION
 
         scored = build_score_breakdown(
             {
@@ -242,6 +268,17 @@ async def _execute(db: AsyncSession, automation: Automations, user_id: str) -> D
         country=automation.country,
         limit=MAX_LIMIT,
     )
+
+    # Measured exactly as an interactive search measures, and for the same
+    # reason: no listing provider returns an email address, so a lead nobody
+    # measured has nobody to write to. Without this an automation produced
+    # strictly worse leads than the same search run by hand — which is the
+    # opposite of what scheduling one is for, since drafting outreach is the
+    # thing automations exist to do.
+    #
+    # Free, so it applies to every result rather than the max_leads_per_run
+    # subset that auto-qualify was limited to.
+    await measure_results(raw_results)
     found = len(raw_results)
 
     new_leads, duplicates = await _save_new_leads(db, automation, user_id, raw_results)

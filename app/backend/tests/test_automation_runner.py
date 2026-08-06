@@ -150,7 +150,8 @@ class TestSearchAndDedupe:
 
         assert result["new_leads"] == 3
         assert result["qualified"] == 1
-        assert result["credits_charged"] == 1
+        # Measuring is free now, so this cap is the only thing bounding a run.
+        assert result["credits_charged"] == 0
 
         rows = (await db_session.execute(select(Leads).where(Leads.user_id == USER_A_ID))).scalars().all()
         qualified_count = sum(1 for r in rows if r.qualified_at is not None)
@@ -159,9 +160,66 @@ class TestSearchAndDedupe:
 
 # ---------- Credits ----------
 
+class TestAutomationLeadsAreMeasuredToo:
+    """A scheduled search must produce the same quality of lead as a manual one.
+
+    It did not. run_automation called the provider directly and never
+    measured, so automation leads arrived with no email address — while the
+    same search run by hand arrived complete. Since drafting outreach is the
+    entire reason to schedule one, that made automations produce leads their
+    own next step could not use.
+    """
+
+    async def test_a_lead_found_by_an_automation_carries_its_email(
+        self, db_session, monkeypatch
+    ):
+        await _seed_workspace(db_session, monthly=100)
+        automation = await _seed_automation(db_session, auto_qualify=False, auto_draft=False)
+
+        _stub_search(monkeypatch, [_biz("Acme Cafe")])
+
+        async def measured(url, **kwargs):
+            return {
+                "has_website": True, "website_url": url, "website_score": 44,
+                "website_state": "moderate", "audit": None,
+                "findings": [{"id": "no_viewport", "label": "Not mobile-friendly"}],
+                "contact_email": "hello@acme.example", "contact_phone": "+44 113 000",
+                "postal_address": "1 Briggate, Leeds", "social_links": ["facebook"],
+                "evidence_tier": "heuristic", "audit_available": False, "evidence": {},
+            }
+
+        import services.discovery_measure as discovery_measure
+        monkeypatch.setattr(discovery_measure, "qualify_website", measured)
+
+        await automation_runner.run_automation(db_session, automation, USER_A_ID)
+
+        lead = (await db_session.execute(
+            select(Leads).where(Leads.user_id == USER_A_ID)
+        )).scalars().one()
+
+        assert lead.contact_email == "hello@acme.example"
+        assert lead.website_score == 44
+        assert lead.qualified_at is not None
+        # Measured even with auto-qualify off, because measuring is now part
+        # of the search rather than an optional extra step.
+        assert automation.auto_qualify is False
+
+
 class TestCredits:
-    async def test_credit_exhaustion_stops_qualification_without_overspending(self, db_session, monkeypatch):
-        ws = await _seed_workspace(db_session, credits_used=24, monthly=25)  # 1 credit left
+    """Measuring costs nothing here, because discovery already measures.
+
+    This used to charge a credit per lead and stop when the balance ran out.
+    Both had to go when measurement became part of what a search buys, and
+    the way they went wrong is worth stating: the balance check read
+    `monthly_credits - credits_used` directly and never consulted
+    has_unlimited_credits, so accounts exempt from metering were stopped at
+    "out of credits" they were never spending. New accounts, which start at
+    zero pending approval, measured nothing at all.
+    """
+
+    async def test_a_zero_balance_no_longer_stops_measurement(self, db_session, monkeypatch):
+        """The regression. An empty balance must not stop free work."""
+        ws = await _seed_workspace(db_session, credits_used=25, monthly=25)  # nothing left
         automation = await _seed_automation(db_session, max_leads_per_run=5, auto_draft=False)
 
         _stub_search(monkeypatch, [_biz("Cafe One"), _biz("Cafe Two"), _biz("Cafe Three")])
@@ -169,14 +227,40 @@ class TestCredits:
 
         result = await automation_runner.run_automation(db_session, automation, USER_A_ID)
 
-        assert result["qualified"] == 1
-        assert result["credits_charged"] == 1
-        assert result["credit_exhausted"] is True
-        assert "out of credits" in result["summary"].lower()
+        assert result["qualified"] == 3
+        assert result["credits_charged"] == 0
+        assert result["credit_exhausted"] is False
+        assert "out of credits" not in result["summary"].lower()
+
+    async def test_an_unmetered_account_is_never_stopped(self, db_session, monkeypatch):
+        """A workspace with no allowance at all still measures.
+
+        This is the shape an unmetered account has: metering is bypassed
+        elsewhere, so its stored balance is meaningless and may well be zero.
+        """
+        await _seed_workspace(db_session, credits_used=0, monthly=0)
+        automation = await _seed_automation(db_session, max_leads_per_run=5, auto_draft=False)
+
+        _stub_search(monkeypatch, [_biz("Cafe One"), _biz("Cafe Two")])
+        _stub_qualify(monkeypatch)
+
+        result = await automation_runner.run_automation(db_session, automation, USER_A_ID)
+
+        assert result["qualified"] == 2
+        assert result["credit_exhausted"] is False
+
+    async def test_measuring_never_touches_the_balance(self, db_session, monkeypatch):
+        ws = await _seed_workspace(db_session, credits_used=5, monthly=25)
+        automation = await _seed_automation(db_session, max_leads_per_run=5, auto_draft=False)
+
+        _stub_search(monkeypatch, [_biz("Cafe One"), _biz("Cafe Two")])
+        _stub_qualify(monkeypatch)
+
+        await automation_runner.run_automation(db_session, automation, USER_A_ID)
 
         refreshed = (await db_session.execute(select(Workspaces).where(Workspaces.id == ws.id))).scalar_one()
         await db_session.refresh(refreshed)
-        assert refreshed.credits_used == 25, "must never exceed the monthly allowance"
+        assert refreshed.credits_used == 5, "measuring must not spend anything"
 
 
 # ---------- Drafting ----------

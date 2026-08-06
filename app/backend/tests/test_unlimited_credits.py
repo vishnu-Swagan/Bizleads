@@ -75,12 +75,23 @@ class TestMeteringIsSkipped:
         return ws
 
     async def test_a_metered_account_is_refused_when_out_of_credits(
-        self, user_a_client, db_session
+        self, user_a_client, db_session, monkeypatch
     ):
         """The control. Without this passing, the exemption test below proves
-        nothing — it could be succeeding because the limit never applied."""
+        nothing — it could be succeeding because the limit never applied.
+
+        Moved from /qualify to /run when measurement became part of what a
+        search buys and qualifying stopped costing anything. A control aimed
+        at an endpoint that no longer charges is not a control: it would pass
+        for the wrong reason and take the exemption test's meaning with it.
+        """
+        import routers.discover as discover
+        monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
         await self._spent_workspace(db_session)
-        resp = await user_a_client.post("/api/v1/discover/qualify", json={"lead_ids": [1]})
+
+        resp = await user_a_client.post(
+            "/api/v1/discover/run", json={"country": "United Kingdom"}
+        )
         assert resp.status_code == 403
         assert resp.json()["detail"]["error"] == "insufficient_credits"
 
@@ -88,8 +99,18 @@ class TestMeteringIsSkipped:
         self, user_a_client, db_session, monkeypatch
     ):
         monkeypatch.setenv("UNLIMITED_CREDIT_EMAILS", USER_A_EMAIL)
+        import routers.discover as discover
+        monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
+
+        async def _empty(**kwargs):
+            return []
+
+        monkeypatch.setattr(discover, "search_places", _empty)
         await self._spent_workspace(db_session)
-        resp = await user_a_client.post("/api/v1/discover/qualify", json={"lead_ids": [1]})
+
+        resp = await user_a_client.post(
+            "/api/v1/discover/run", json={"country": "United Kingdom"}
+        )
         assert resp.status_code != 403
 
     async def test_an_exempt_account_spends_nothing(

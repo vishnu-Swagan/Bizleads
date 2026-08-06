@@ -173,26 +173,37 @@ class TestCreditsAndLimits:
             "/api/v1/discover/qualify", json={"lead_ids": [l.id for l in leads]}
         )
 
-        assert response.json()["credits_charged"] == 3
+        # Free since discovery started measuring every result it returns.
+        # Charging again to re-measure a lead would bill twice for work the
+        # search already paid for.
+        assert response.json()["credits_charged"] == 0
         refreshed = (await db_session.execute(select(Workspaces).where(Workspaces.id == ws.id))).scalar_one()
         await db_session.refresh(refreshed)
-        assert refreshed.credits_used == 3
+        assert refreshed.credits_used == 0
 
-    async def test_insufficient_credits_is_refused_before_any_work(
+    async def test_an_empty_balance_does_not_block_measuring(
         self, user_a_client, db_session, monkeypatch
     ):
+        """Replaces a test asserting the opposite.
+
+        A zero balance used to refuse this endpoint. That check outlived its
+        purpose the moment measuring stopped costing anything, and while it
+        survived it produced the worst version of the bug: accounts exempt
+        from metering, and new accounts starting at zero pending approval,
+        were both refused work that was free.
+        """
         _stub_qualify(monkeypatch)
         await _seed_workspace(db_session, credits_used=25, monthly=25)
         lead = await _seed_lead(db_session, website_score=None)
 
         response = await user_a_client.post("/api/v1/discover/qualify", json={"lead_ids": [lead.id]})
 
-        assert response.status_code == 403
-        assert response.json()["detail"]["error"] == "insufficient_credits"
+        assert response.status_code == 200
+        assert response.json()["credits_charged"] == 0
 
         row = (await db_session.execute(select(Leads).where(Leads.id == lead.id))).scalar_one()
         await db_session.refresh(row)
-        assert row.website_score is None, "nothing should have been measured"
+        assert row.website_score is not None, "it should have been measured"
 
     async def test_batch_size_is_capped(self, user_a_client, db_session, monkeypatch):
         # Each lead is at least one outbound request; an uncapped batch would

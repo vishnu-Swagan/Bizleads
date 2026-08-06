@@ -494,11 +494,17 @@ export default function AppLeadDetail() {
               <CardContent className="p-5">
                 {findings === null ? (
                   <>
-                    <p className="text-sm text-slate-700 font-medium">Not measured yet</p>
+                    <p className="text-sm text-slate-700 font-medium">Site could not be measured</p>
+                    {/* Was "Run Qualify on this lead from the Leads page…
+                        That costs one credit". Both halves became wrong when
+                        discovery started measuring every result: there is no
+                        Qualify button to send anyone to, and measuring costs
+                        nothing. Sending a user to look for a control that
+                        does not exist is worse than saying nothing. */}
                     <p className="text-sm text-slate-500 mt-1">
-                      Run <span className="font-medium">Qualify</span> on this lead from the Leads page to
-                      measure its site. That costs one credit and produces the specific, checkable problems
-                      you can quote back to the business.
+                      Every lead is measured when it is discovered, so this one's site was
+                      unreachable, blocked or parked at the time. Re-running the search will
+                      try again — it costs nothing extra to measure.
                     </p>
                   </>
                 ) : findings.length === 0 ? (

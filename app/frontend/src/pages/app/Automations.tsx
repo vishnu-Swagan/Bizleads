@@ -1294,8 +1294,8 @@ export default function AppAutomations() {
                 <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
                   An automation repeats a Discover search — daily or weekly — and can optionally qualify
                   and draft outreach for the leads it finds, so your pipeline fills up without you running
-                  each search by hand. Qualifying spends 1 credit per lead measured; max leads per run caps
-                  how many are pulled and measured each time it runs.
+                  each search by hand. Measuring is free — it is part of what the search buys; max
+                  leads per run caps how many are pulled and measured each time it runs.
                 </p>
                 <Button
                   onClick={openCreateForm}
@@ -1482,8 +1482,8 @@ export default function AppAutomations() {
                 <div className="pr-3">
                   <p className="text-sm font-medium text-slate-900">Auto-qualify new leads</p>
                   <p className="text-xs text-slate-500">
-                    Measures each new lead&rsquo;s website before it lands in your pipeline. Spends 1
-                    credit per lead measured.
+                    Measures each new lead&rsquo;s website before it lands in your pipeline. Free —
+                    measuring is part of what the search already paid for.
                   </p>
                 </div>
                 <Switch
