@@ -43,6 +43,7 @@ from models.search_jobs import Search_jobs
 from models.workspaces import Workspaces
 from schemas.auth import UserResponse
 from services import account_review, activity
+from services.qualification import qualify_website
 from services.admin_access import admin_access_configured
 from services.discovery_provider import (
     active_provider_slug,
@@ -767,6 +768,95 @@ async def delete_account(
 
     await db.commit()
     return {"status": "deleted", "email": user.email}
+
+
+class RemeasureRequest(BaseModel):
+    # Bounded per call. Every lead is at least one outbound fetch against a
+    # third party, so an unbounded backfill is both a long-running request
+    # and a burst of traffic somebody else has to absorb.
+    limit: int = 50
+
+
+@router.post("/leads/remeasure")
+async def remeasure_leads(
+    data: RemeasureRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: UserResponse = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Re-measure leads that have no email address.
+
+    Leads saved before discovery started measuring — and before the extractor
+    learned to read contact pages, plain text and Cloudflare obfuscation —
+    have no address on them and no way to acquire one: the measurement now
+    happens at discovery, and these leads were discovered before it did.
+
+    Only leads with no email are touched, so this cannot overwrite an address
+    somebody already has, and it can be run repeatedly: each call takes the
+    next batch of whatever is still blank.
+    """
+    limit = max(1, min(data.limit, 200))
+
+    rows = (
+        await db.execute(
+            select(Leads)
+            .where(
+                or_(Leads.contact_email.is_(None), Leads.contact_email == ""),
+                Leads.website_url.isnot(None),
+                Leads.website_url != "",
+            )
+            .order_by(Leads.id.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    found = 0
+    attempted = 0
+
+    for lead in rows:
+        attempted += 1
+        try:
+            measurement = await qualify_website(lead.website_url, allow_audit=False)
+        except Exception:
+            logger.exception("Could not re-measure lead %s", lead.id)
+            continue
+
+        if measurement.get("contact_email"):
+            lead.contact_email = measurement["contact_email"]
+            found += 1
+
+        # Fill the other gaps while the page is open, but never overwrite
+        # something already recorded — a re-measure is there to complete a
+        # lead, not to relitigate it.
+        if measurement.get("contact_phone") and not (lead.contact_phone or "").strip():
+            lead.contact_phone = measurement["contact_phone"]
+        if measurement.get("postal_address") and not (lead.address or "").strip():
+            lead.address = measurement["postal_address"]
+        if measurement.get("website_score") is not None and lead.website_score is None:
+            lead.website_score = measurement["website_score"]
+            lead.has_website = measurement["has_website"]
+            lead.findings = json.dumps(measurement["findings"])
+            lead.qualified_at = datetime.now(timezone.utc).isoformat()
+
+    await activity.record(
+        db, "leads.remeasured", user_id=admin.id, user_email=admin.email,
+        entity_type="lead",
+        summary=f"Re-measured {attempted} leads, found {found} email addresses",
+        metadata={"attempted": attempted, "emails_found": found},
+    )
+    await db.commit()
+
+    remaining = await _count(
+        db, Leads,
+        or_(Leads.contact_email.is_(None), Leads.contact_email == ""),
+        Leads.website_url.isnot(None),
+        Leads.website_url != "",
+    )
+
+    return {
+        "attempted": attempted,
+        "emails_found": found,
+        "still_without_email": remaining,
+    }
 
 
 @router.get("/export/activity.csv")

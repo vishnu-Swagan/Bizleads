@@ -644,7 +644,11 @@ export default function AppAutomations() {
       category: formCategory === 'all' ? null : formCategory,
       query: editingAutomation?.query ?? null,
       website_state: editingAutomation?.website_state ?? 'all',
-      auto_qualify: formAutoQualify,
+      // Always on. Measurement is no longer optional — the field is kept
+      // because the API still carries it, and sending false would only skip
+      // the step that persists findings onto the lead, leaving drafting with
+      // nothing to quote.
+      auto_qualify: true,
       auto_draft: formAutoDraft,
       max_leads_per_run: maxLeads,
       schedule: formSchedule,
@@ -1478,36 +1482,29 @@ export default function AppAutomations() {
                 </Select>
               </div>
 
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
-                <div className="pr-3">
-                  <p className="text-sm font-medium text-slate-900">Auto-qualify new leads</p>
-                  <p className="text-xs text-slate-500">
-                    Measures each new lead&rsquo;s website before it lands in your pipeline. Free —
-                    measuring is part of what the search already paid for.
-                  </p>
-                </div>
-                <Switch
-                  checked={formAutoQualify}
-                  onCheckedChange={(v) => {
-                    setFormAutoQualify(v);
-                    if (!v) setFormAutoDraft(false);
-                  }}
-                />
+              {/* The auto-qualify switch was removed here. Every automation
+                  measures now, so the switch offered a choice that no longer
+                  existed: turning it off changed nothing except disabling
+                  drafting. A control that does not control anything is worse
+                  than no control, because people reason about it. */}
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-sm font-medium text-slate-900">Measurement</p>
+                <p className="text-xs text-slate-500">
+                  Every lead this automation finds is measured automatically — website
+                  score, contact details and the specific problems worth quoting. Included
+                  in the search, no extra credits.
+                </p>
               </div>
 
               <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
                 <div className="pr-3">
                   <p className="text-sm font-medium text-slate-900">Auto-draft outreach</p>
                   <p className="text-xs text-slate-500">
-                    Writes an email from each qualified lead&rsquo;s measured findings. Free — drafts wait
-                    in the approval queue below until you send them. Requires auto-qualify.
+                    Writes an email from each lead&rsquo;s measured findings. Free — drafts wait
+                    in the approval queue below until you send them.
                   </p>
                 </div>
-                <Switch
-                  checked={formAutoDraft}
-                  onCheckedChange={setFormAutoDraft}
-                  disabled={!formAutoQualify}
-                />
+                <Switch checked={formAutoDraft} onCheckedChange={setFormAutoDraft} />
               </div>
 
               <div className="space-y-1.5">

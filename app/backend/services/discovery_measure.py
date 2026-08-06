@@ -30,14 +30,24 @@ logger = logging.getLogger(__name__)
 # The measurements run concurrently because they are almost entirely network
 # wait. In series a twenty-result search would take twenty times the per-site
 # timeout and the browser would give up long before it returned.
-DISCOVERY_MEASURE_CONCURRENCY = 8
+DISCOVERY_MEASURE_CONCURRENCY = 12
 
 # PageSpeed renders the page and costs 10-20s per lead, so it cannot run for
 # every result inside one request. Leads are audited while this budget lasts
 # and measured at the free heuristic tier afterwards. evidence_tier on each
 # result records which tier produced its score, so a shallower result is
 # visibly shallower rather than quietly weaker.
-DISCOVERY_AUDIT_BUDGET_SECONDS = 45.0
+#
+# Deliberately small. At 45s a twenty-result search spent most of a minute
+# on audits before returning anything, and a search that appears to hang is
+# a worse product than one that returns slightly shallower scores promptly —
+# particularly since the heuristic tier already yields the parts a user acts
+# on: the email address, the findings, and a website score. PageSpeed refines
+# the score; it does not produce the lead.
+#
+# The audit is also the one measurement a user can ask for again later
+# without paying, so nothing is lost by not doing all of it up front.
+DISCOVERY_AUDIT_BUDGET_SECONDS = 12.0
 
 
 async def measure_results(results: list) -> None:

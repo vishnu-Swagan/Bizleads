@@ -78,9 +78,79 @@ class TestExistingAccountsAreNotDisturbed:
 
 
 class TestTheGate:
+    async def test_a_clean_signup_is_approved_without_waiting(
+        self, user_b_client, db_session, monkeypatch
+    ):
+        """The default. Holding an ordinary customer makes the queue the
+        bottleneck on growth, and most of them do not come back to find out
+        whether anybody got round to them."""
+        ws, _ = await _pending(db_session)
+
+        import routers.discover as discover
+        monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
+
+        async def _empty(**kwargs):
+            return []
+
+        monkeypatch.setattr(discover, "search_places", _empty)
+
+        response = await user_b_client.post(
+            "/api/v1/discover/run", json={"country": "United Kingdom"}
+        )
+
+        assert response.status_code == 200
+        approval = await account_review.get_approval(db_session, USER_B_ID)
+        await db_session.refresh(approval)
+        assert approval.status == account_review.STATUS_APPROVED
+        await db_session.refresh(ws)
+        assert ws.monthly_credits == account_review.FREE_CREDITS
+
+    async def test_a_flagged_signup_still_waits(self, user_b_client, db_session, monkeypatch):
+        """Only the suspicious ones reach the queue, which is what keeps it
+        small enough to actually be worked."""
+        await _pending(db_session)
+
+        import routers.discover as discover
+        # Pin the address the request reports, then put three other accounts
+        # on it. Assessment reads the address off the request, so seeding
+        # signals without pinning it would flag nothing.
+        monkeypatch.setattr(discover, "describe", lambda request: ("203.0.113.50", None, None))
+        for i in range(3):
+            await account_review.record_signal(
+                db_session, user_id=f"farm{i}", email=f"farm{i}@example.com", ip="203.0.113.50"
+            )
+        await db_session.commit()
+
+        monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
+
+        response = await user_b_client.post(
+            "/api/v1/discover/run", json={"country": "United Kingdom"}
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"] == "account_pending_approval"
+
+    async def test_holding_everything_can_be_switched_on(
+        self, user_b_client, db_session, monkeypatch
+    ):
+        """A business decision, reversible without a deploy."""
+        monkeypatch.setenv("HOLD_ALL_SIGNUPS_FOR_REVIEW", "true")
+        await _pending(db_session)
+
+        import routers.discover as discover
+        monkeypatch.setattr(discover, "is_discovery_configured", lambda: True)
+
+        response = await user_b_client.post(
+            "/api/v1/discover/run", json={"country": "United Kingdom"}
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"] == "account_pending_approval"
+
     async def test_a_pending_account_is_refused_and_told_why(
         self, user_b_client, db_session, monkeypatch
     ):
+        monkeypatch.setenv("HOLD_ALL_SIGNUPS_FOR_REVIEW", "true")
         await _pending(db_session)
 
         import routers.discover as discover

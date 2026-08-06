@@ -8,9 +8,11 @@
 import { useEffect, useState } from 'react';
 import AdminShell, { formatNumber } from '@/components/AdminShell';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { client } from '@/lib/api';
 import { AlertTriangle, Search, Users, Mail, Sparkles, CreditCard, UserPlus } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Window {
   searches: number;
@@ -51,6 +53,26 @@ export default function AdminOverview() {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [remeasuring, setRemeasuring] = useState(false);
+  const [remeasure, setRemeasure] = useState<{
+    attempted: number; emails_found: number; still_without_email: number;
+  } | null>(null);
+
+  const runRemeasure = async () => {
+    setRemeasuring(true);
+    try {
+      const res = await client.apiCall.invoke({
+        url: '/api/v1/admin/leads/remeasure', method: 'POST', data: { limit: 50 },
+        options: { timeout: 300000 },
+      });
+      setRemeasure(res.data);
+      toast.success(`Found ${res.data?.emails_found ?? 0} email addresses`);
+    } catch (err: any) {
+      toast.error(err?.data?.detail ?? 'Re-measure failed.');
+    } finally {
+      setRemeasuring(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -161,6 +183,42 @@ export default function AdminOverview() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Leads saved before discovery started measuring have no email
+                and no way to acquire one, since measurement now happens at
+                discovery and they were found before it did. */}
+            {data.all_time.leads_discovered > data.all_time.leads_with_email && (
+              <Card className="border-slate-200">
+                <CardContent className="p-5 flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">
+                      {formatNumber(data.all_time.leads_discovered - data.all_time.leads_with_email)} leads
+                      have no email address
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Mostly leads found before measurement moved into discovery. Re-measuring
+                      reads their contact pages and fills in what it finds. Runs 50 at a time
+                      and never overwrites an address already on file.
+                    </p>
+                    {remeasure && (
+                      <p className="text-xs text-green-700 mt-1.5">
+                        Checked {remeasure.attempted}, found {remeasure.emails_found} email
+                        {remeasure.emails_found === 1 ? '' : 's'} · {remeasure.still_without_email} still blank
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={remeasuring}
+                    onClick={runRemeasure}
+                    className="gap-2 shrink-0"
+                  >
+                    {remeasuring ? 'Re-measuring…' : 'Re-measure 50'}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
 
             <p className="text-xs text-slate-400">
               Activity counts start from when tracking was deployed, so older

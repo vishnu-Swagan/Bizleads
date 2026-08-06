@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.account_approvals import Account_approvals
 from models.account_signals import Account_signals
+from models.workspaces import Workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +348,66 @@ async def open_pending(
         return None
 
 
+_AUTO_APPROVE_VAR = "HOLD_ALL_SIGNUPS_FOR_REVIEW"
+
+
+def hold_everything() -> bool:
+    """Whether every signup waits for a human, however ordinary it looks.
+
+    Off by default, so a signup that raises no flag is approved immediately
+    and a suspicious one is held. Holding everything makes the queue the
+    bottleneck on growth: an ordinary customer who signs up at midnight
+    cannot use the product they just signed up for until somebody wakes up,
+    and most of them will not come back to find out whether you did.
+
+    The setting exists because that trade is a business decision rather than
+    a technical one, and it can be reversed without a deploy.
+    """
+    return os.environ.get(_AUTO_APPROVE_VAR, "").strip().lower() in {"1", "true", "yes"}
+
+
+async def auto_approve_if_clean(
+    db: AsyncSession,
+    approval: Account_approvals,
+    risk: Dict[str, Any],
+) -> bool:
+    """Grant the free credits when nothing about this signup looks wrong.
+
+    Returns whether it was approved.
+
+    "Clean" means no high-severity flag. A low-severity note — one other
+    account on a shared office connection, say — is not a reason to make a
+    real customer wait, and holding on it would mean holding most of them:
+    colleagues, families and anyone behind one corporate connection all trip
+    it legitimately.
+
+    High-severity signups still wait for a person. That is the whole point of
+    the queue, and it stays small enough to actually be worked.
+    """
+    if hold_everything():
+        return False
+    if risk.get("severity") == "high":
+        return False
+
+    workspace = (
+        await db.execute(
+            select(Workspaces).where(Workspaces.owner_id == approval.user_id)
+            .order_by(Workspaces.id.asc()).limit(1)
+        )
+    ).scalars().first()
+
+    approval.status = STATUS_APPROVED
+    approval.decided_by = "system (no flags raised)"
+    approval.decided_at = datetime.now(timezone.utc)
+    approval.reason = "Approved automatically: nothing unusual found at signup."
+
+    if workspace:
+        workspace.monthly_credits = FREE_CREDITS
+        approval.credits_granted = FREE_CREDITS
+
+    return True
+
+
 async def ensure_assessed(
     db: AsyncSession,
     *,
@@ -376,6 +437,12 @@ async def ensure_assessed(
 
         risk = await flag_if_suspicious(db, user_id=user_id, email=email, ip=ip)
         approval.risk_json = json.dumps(risk, default=str)[:8000]
+
+        # Decided in the same request that assessed it, so an ordinary
+        # customer never sees a waiting screen at all — the queue holds only
+        # the signups somebody actually needs to look at.
+        await auto_approve_if_clean(db, approval, risk)
+
         await db.flush()
     except Exception:
         logger.exception("Could not assess pending account %s", user_id)
