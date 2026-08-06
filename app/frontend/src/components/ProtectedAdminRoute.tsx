@@ -14,7 +14,7 @@ const ProtectedAdminRoute: React.FC<ProtectedAdminRouteProps> = ({
   children,
 }) => {
   const { user, loading, isAdmin: isAdminByRole, login } = useAuth();
-  const { credits } = useCredits();
+  const { credits, loaded, refresh } = useCredits();
   const location = useLocation();
 
   // Two sources, either sufficient. useAuth reads role=admin off the token,
@@ -22,11 +22,21 @@ const ProtectedAdminRoute: React.FC<ProtectedAdminRouteProps> = ({
   // additionally covers the ADMIN_EMAILS allowlist, where an operator still
   // carries role="user" — checking only the role would lock out precisely the
   // team this console was built for.
-  //
-  // `credits` is null until /billing/usage returns, so wait rather than
-  // rendering the refusal screen at somebody who is about to be admitted.
   const isAdmin = isAdminByRole || credits?.isAdmin === true;
-  const stillResolving = credits === null && !isAdminByRole;
+
+  // Wait on `loaded`, never on `credits` being non-null. Those look
+  // interchangeable and are not: credits is null before the first fetch AND
+  // after a failed one, so gating on it meant a failed request produced a
+  // permanent "Verifying permissions" with no error and no way out. Render's
+  // free tier sleeps, so the first call after an idle period routinely takes
+  // long enough to fail — this was reachable in normal use, not an edge case.
+  const stillResolving = !loaded && !isAdminByRole;
+
+  // Loaded, but we never heard back. Not the same as "you are not an admin",
+  // and must not be reported as one: telling somebody they lack permission
+  // when the truth is the server did not answer sends them to ask for access
+  // they already have.
+  const checkFailed = loaded && credits === null && !isAdminByRole;
 
   // Loading state
   if (loading || stillResolving) {
@@ -43,6 +53,33 @@ const ProtectedAdminRoute: React.FC<ProtectedAdminRouteProps> = ({
   // If the user is not logged in, redirect to the login page
   if (!user) {
     return <Navigate to="/" replace />;
+  }
+
+  if (checkFailed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-md mx-4">
+          <CardHeader className="text-center">
+            <div className="mx-auto w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-amber-600" />
+            </div>
+            <CardTitle className="text-xl text-gray-900">
+              Could not verify your access
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-center space-y-4">
+            <p className="text-gray-600 text-sm">
+              The server did not answer when we asked whether this account is an
+              administrator. This is usually the API waking up after a quiet period —
+              trying again normally works.
+            </p>
+            <Button onClick={() => void refresh()} className="w-full">
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   // If the user is not an admin, show an insufficient-permissions page
