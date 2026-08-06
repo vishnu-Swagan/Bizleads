@@ -204,6 +204,23 @@ services:
       - key: ADMIN_EMAILS
         sync: false
 
+      # --- Support queue ---
+      # Shared secret that lets whoever works on the product collect the
+      # requests your team files at /admin/support, and post outcomes back.
+      # Unset disables those two endpoints entirely rather than leaving them
+      # open: the requests describe what is broken and how, which is a useful
+      # map for anybody who should not have it.
+      - key: SUPPORT_AGENT_SECRET
+        sync: false
+
+      # --- Signup review ---
+      # Set to "true" to hold EVERY new signup for manual approval. Unset (the
+      # default) approves signups that raise no flag and queues only the
+      # suspicious ones, so an ordinary customer is not left waiting for
+      # somebody to wake up.
+      - key: HOLD_ALL_SIGNUPS_FOR_REVIEW
+        sync: false
+
       # --- Safety rails ---
       # Must not be "dev": the exception handler returns full stack traces when
       # it is.
