@@ -234,3 +234,87 @@ class TestFilteringAndCounts:
             f"/api/v1/support/{ticket['id']}/status", json={"status": "banana"}
         )
         assert response.status_code == 400
+
+
+class TestRoutingBetweenTheTwoAgents:
+    """Only one agent may work a request.
+
+    Two triage agents share this queue: the laptop every fifteen minutes, the
+    cloud every hour. With no coordination both pick up the same request and
+    both reply, which leaves an operator holding two diagnoses on one thread
+    and no way to tell which to believe. The heartbeat is how the cloud run
+    knows to stand down.
+    """
+
+    async def test_no_heartbeat_reads_as_the_laptop_being_absent(
+        self, anon_client, agent_secret
+    ):
+        """The cloud must work the queue when nothing else is."""
+        body = (await anon_client.get(
+            "/api/v1/support/agent/queue", headers={"X-Support-Secret": SECRET}
+        )).json()
+
+        assert body["local_agent_active"] is False
+        # Reported separately from the boolean: "never checked in" and
+        # "checked in two hours ago" are different situations.
+        assert body["local_agent_seconds_ago"] is None
+
+    async def test_a_fresh_heartbeat_tells_the_cloud_to_stand_down(
+        self, anon_client, agent_secret
+    ):
+        await anon_client.post(
+            "/api/v1/support/agent/heartbeat",
+            json={"agent": "local", "detail": "vishnus-macbook"},
+            headers={"X-Support-Secret": SECRET},
+        )
+
+        body = (await anon_client.get(
+            "/api/v1/support/agent/queue", headers={"X-Support-Secret": SECRET}
+        )).json()
+
+        assert body["local_agent_active"] is True
+        assert body["local_agent_seconds_ago"] < 60
+
+    async def test_a_stale_heartbeat_hands_the_queue_back(
+        self, anon_client, db_session, agent_secret
+    ):
+        """A laptop shut two hours ago is not on the case."""
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import select
+        from models.agent_heartbeats import Agent_heartbeats
+
+        await anon_client.post(
+            "/api/v1/support/agent/heartbeat", json={"agent": "local"},
+            headers={"X-Support-Secret": SECRET},
+        )
+
+        row = (await db_session.execute(select(Agent_heartbeats))).scalars().one()
+        row.last_seen = datetime.now(timezone.utc) - timedelta(hours=2)
+        await db_session.commit()
+
+        body = (await anon_client.get(
+            "/api/v1/support/agent/queue", headers={"X-Support-Secret": SECRET}
+        )).json()
+
+        assert body["local_agent_active"] is False
+        assert body["local_agent_seconds_ago"] > 3600
+
+    async def test_the_heartbeat_is_one_row_per_agent(self, anon_client, db_session, agent_secret):
+        """Overwritten, not appended. A row per beat is 96 a day of noise."""
+        from sqlalchemy import select
+        from models.agent_heartbeats import Agent_heartbeats
+
+        for _ in range(3):
+            await anon_client.post(
+                "/api/v1/support/agent/heartbeat", json={"agent": "local"},
+                headers={"X-Support-Secret": SECRET},
+            )
+
+        rows = (await db_session.execute(select(Agent_heartbeats))).scalars().all()
+        assert len(rows) == 1
+
+    async def test_the_heartbeat_needs_the_secret(self, anon_client, agent_secret):
+        response = await anon_client.post(
+            "/api/v1/support/agent/heartbeat", json={"agent": "local"}
+        )
+        assert response.status_code == 401

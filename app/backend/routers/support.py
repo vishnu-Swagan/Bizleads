@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from dependencies.auth import get_admin_user
+from models.agent_heartbeats import Agent_heartbeats
 from models.support_tickets import Support_messages, Support_tickets
 from schemas.auth import UserResponse
 from services import activity
@@ -286,6 +287,77 @@ async def set_status(
 # scheduled-automation endpoint, and the same failure mode if the secret is
 # unset — closed, not open.
 
+# How long a local heartbeat stays meaningful. The laptop triages every 15
+# minutes, so 25 covers a missed tick — a busy session, a slow API wake —
+# without pretending a laptop shut two hours ago is still on the case.
+#
+# The asymmetry is deliberate. Standing down when the laptop is actually gone
+# costs at most one hour of delay; both agents working the same request costs
+# an operator two conflicting answers on one thread, and they then have to
+# work out which to believe. Erring toward the delay is the cheaper mistake.
+LOCAL_HEARTBEAT_TTL_SECONDS = 25 * 60
+
+
+class Heartbeat(BaseModel):
+    agent: str = "local"
+    detail: str = ""
+
+
+async def _seconds_since_heartbeat(db: AsyncSession, agent: str) -> Optional[int]:
+    row = (
+        await db.execute(
+            select(Agent_heartbeats)
+            .where(Agent_heartbeats.agent == agent)
+            .order_by(Agent_heartbeats.id.asc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if row is None or row.last_seen is None:
+        return None
+
+    last_seen = row.last_seen
+    # Rows written before the tz-aware default carry naive timestamps. They
+    # were always UTC, so read them as such rather than letting the
+    # subtraction raise.
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    return int((datetime.now(timezone.utc) - last_seen).total_seconds())
+
+
+@router.post("/agent/heartbeat")
+async def agent_heartbeat(
+    data: Heartbeat,
+    x_support_secret: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Record that a triage agent is running.
+
+    The laptop calls this every pass. The cloud run reads the result and
+    stands down while it is fresh, so only one agent ever works a request.
+    """
+    _verify_agent_secret(x_support_secret)
+
+    row = (
+        await db.execute(
+            select(Agent_heartbeats)
+            .where(Agent_heartbeats.agent == data.agent)
+            .order_by(Agent_heartbeats.id.asc())
+            .limit(1)
+        )
+    ).scalars().first()
+
+    if row is None:
+        row = Agent_heartbeats(agent=data.agent, detail=data.detail[:200])
+        db.add(row)
+    else:
+        row.last_seen = datetime.now(timezone.utc)
+        if data.detail:
+            row.detail = data.detail[:200]
+
+    await db.commit()
+    return {"agent": data.agent, "recorded": True}
+
+
 @router.get("/agent/queue")
 async def agent_queue(
     x_support_secret: Optional[str] = Header(default=None),
@@ -297,6 +369,9 @@ async def agent_queue(
     Returns the whole conversation rather than a summary, because the thread
     is usually where the actual requirement is: the title says "export is
     wrong" and the third message says which column.
+
+    Also reports whether the laptop agent is currently alive, so the cloud run
+    can decide in one call whether it should be doing this at all.
     """
     _verify_agent_secret(x_support_secret)
 
@@ -309,9 +384,19 @@ async def agent_queue(
         )
     ).scalars().all()
 
+    since_local = await _seconds_since_heartbeat(db, "local")
+
     return {
         "items": [_ticket_dict(t, await _messages_for(db, t.id)) for t in rows],
         "count": len(rows),
+        # None means the laptop has never checked in. Reported as its own
+        # value rather than folded into local_agent_active, because "never
+        # seen" and "seen two hours ago" are different situations and an
+        # operator debugging this needs to tell them apart.
+        "local_agent_seconds_ago": since_local,
+        "local_agent_active": (
+            since_local is not None and since_local < LOCAL_HEARTBEAT_TTL_SECONDS
+        ),
     }
 
 
